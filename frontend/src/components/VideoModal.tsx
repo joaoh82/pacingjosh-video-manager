@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Video, VideoUpdate } from '@/lib/types';
+import { Video, VideoUpdate, UsageEntry } from '@/lib/types';
 import { getStreamUrl, updateVideo } from '@/lib/api';
 import { format } from 'date-fns';
 
@@ -25,6 +25,7 @@ export default function VideoModal({
     location: video.metadata?.location || '',
     notes: video.metadata?.notes || '',
     tags: video.tags.map((t) => t.name).join(', '),
+    usages: (video.usages || []).map((u) => ({ title: u.title, link: u.link })),
   });
 
   useEffect(() => {
@@ -36,6 +37,7 @@ export default function VideoModal({
         location: video.metadata?.location || '',
         notes: video.metadata?.notes || '',
         tags: video.tags.map((t) => t.name).join(', '),
+        usages: (video.usages || []).map((u) => ({ title: u.title, link: u.link })),
       });
       setIsEditing(false);
     } else {
@@ -59,6 +61,7 @@ export default function VideoModal({
         tags: formData.tags
           ? formData.tags.split(',').map((t) => t.trim()).filter(Boolean)
           : [],
+        usages: formData.usages.filter((u) => u.title.trim() && u.link.trim()),
       };
 
       await updateVideo(video.id, updateData);
@@ -96,6 +99,26 @@ export default function VideoModal({
       return `${hours}h ${minutes}m ${secs}s`;
     }
     return `${minutes}m ${secs}s`;
+  };
+
+  const addUsage = () => {
+    setFormData({
+      ...formData,
+      usages: [...formData.usages, { title: '', link: '' }],
+    });
+  };
+
+  const removeUsage = (index: number) => {
+    setFormData({
+      ...formData,
+      usages: formData.usages.filter((_, i) => i !== index),
+    });
+  };
+
+  const updateUsage = (index: number, field: 'title' | 'link', value: string) => {
+    const updated = [...formData.usages];
+    updated[index] = { ...updated[index], [field]: value };
+    setFormData({ ...formData, usages: updated });
   };
 
   return (
@@ -259,9 +282,52 @@ export default function VideoModal({
                       value={formData.notes}
                       onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
                       className="input"
-                      rows={6}
+                      rows={4}
                       placeholder="Add notes about this video..."
                     />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                      Used In
+                    </label>
+                    <div className="space-y-2">
+                      {formData.usages.map((usage, index) => (
+                        <div key={index} className="flex gap-2">
+                          <input
+                            type="text"
+                            value={usage.title}
+                            onChange={(e) => updateUsage(index, 'title', e.target.value)}
+                            className="input flex-1"
+                            placeholder="Video title"
+                          />
+                          <input
+                            type="url"
+                            value={usage.link}
+                            onChange={(e) => updateUsage(index, 'link', e.target.value)}
+                            className="input flex-1"
+                            placeholder="https://..."
+                          />
+                          <button
+                            type="button"
+                            onClick={() => removeUsage(index)}
+                            className="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 px-2 flex-shrink-0"
+                            title="Remove"
+                          >
+                            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={addUsage}
+                      className="mt-2 text-sm text-primary-600 dark:text-primary-400 hover:text-primary-700 dark:hover:text-primary-300"
+                    >
+                      + Add usage
+                    </button>
                   </div>
                 </div>
               ) : (
@@ -309,8 +375,29 @@ export default function VideoModal({
                         </div>
                       )}
 
+                      {(video.usages || []).length > 0 && (
+                        <div>
+                          <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Used In:</span>
+                          <ul className="mt-2 space-y-1">
+                            {video.usages.map((usage) => (
+                              <li key={usage.id} className="text-sm">
+                                <a
+                                  href={usage.link}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-primary-600 dark:text-primary-400 hover:underline"
+                                >
+                                  {usage.title}
+                                </a>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
                       {!video.metadata?.category && !video.metadata?.location &&
-                       video.tags.length === 0 && !video.metadata?.notes && (
+                       video.tags.length === 0 && !video.metadata?.notes &&
+                       (video.usages || []).length === 0 && (
                         <p className="text-gray-500 dark:text-gray-400 text-sm italic">
                           No metadata available. Click Edit to add information.
                         </p>

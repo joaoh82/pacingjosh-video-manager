@@ -3,7 +3,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_, and_, func
 
-from app.models import Video, Metadata, Tag, VideoTag
+from app.models import Video, Metadata, Tag, VideoTag, VideoUsage
 
 
 class SearchService:
@@ -41,7 +41,8 @@ class SearchService:
         # Base query with eager loading
         query = db.query(Video).options(
             joinedload(Video.video_metadata),
-            joinedload(Video.video_tags).joinedload(VideoTag.tag)
+            joinedload(Video.video_tags).joinedload(VideoTag.tag),
+            joinedload(Video.video_usages)
         )
 
         # Apply search filter

@@ -2,7 +2,7 @@ from typing import Optional, List
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 
-from app.models import Video, Metadata, Tag, VideoTag
+from app.models import Video, Metadata, Tag, VideoTag, VideoUsage
 from app.schemas.video import VideoUpdate, BulkUpdateRequest
 
 
@@ -24,7 +24,8 @@ class VideoService:
             db.query(Video)
             .options(
                 joinedload(Video.video_metadata),
-                joinedload(Video.video_tags).joinedload(VideoTag.tag)
+                joinedload(Video.video_tags).joinedload(VideoTag.tag),
+                joinedload(Video.video_usages)
             )
             .filter(Video.id == video_id)
             .first()
@@ -79,6 +80,10 @@ class VideoService:
         # Update tags
         if update_data.tags is not None:
             self._update_video_tags(db, video, update_data.tags)
+
+        # Update usages
+        if update_data.usages is not None:
+            self._update_video_usages(db, video, update_data.usages)
 
         db.commit()
         db.refresh(video)
@@ -226,6 +231,27 @@ class VideoService:
             db.add(tag)
             db.flush()
         return tag
+
+    def _update_video_usages(self, db: Session, video: Video, usages: list) -> None:
+        """
+        Replace all usages for a video.
+
+        Args:
+            db: Database session
+            video: Video object
+            usages: List of UsageEntry objects with title and link
+        """
+        # Remove existing usages
+        db.query(VideoUsage).filter(VideoUsage.video_id == video.id).delete()
+
+        # Add new usages
+        for usage in usages:
+            video_usage = VideoUsage(
+                video_id=video.id,
+                title=usage.title,
+                link=usage.link
+            )
+            db.add(video_usage)
 
     def get_all_categories(self, db: Session) -> List[dict]:
         """

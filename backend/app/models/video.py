@@ -24,6 +24,7 @@ class Video(Base):
     # Relationships
     video_metadata = relationship("Metadata", back_populates="video", uselist=False, cascade="all, delete-orphan")
     video_tags = relationship("VideoTag", back_populates="video", cascade="all, delete-orphan")
+    video_usages = relationship("VideoUsage", back_populates="video", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<Video(id={self.id}, filename='{self.filename}')>"

@@ -35,5 +35,5 @@ def get_db():
 
 def init_db():
     """Initialize database by creating all tables."""
-    from app.models import Video, Metadata, Tag, VideoTag
+    from app.models import Video, Metadata, Tag, VideoTag, VideoUsage
     Base.metadata.create_all(bind=engine)
