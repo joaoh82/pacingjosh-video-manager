@@ -2,6 +2,8 @@
 
 A modern, full-stack video indexing and management application for organizing and browsing large video collections. Built for runners, content creators, and anyone managing thousands of videos locally.
 
+Created to help manage my own videos for my Youtube Channel [Pacing Josh](https://www.youtube.com/@pacingjosh)
+
 ![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.109.0-green.svg)
 ![Next.js](https://img.shields.io/badge/Next.js-14.2.0-black.svg)
