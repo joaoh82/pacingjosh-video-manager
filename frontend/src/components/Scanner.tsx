@@ -8,6 +8,16 @@ interface ScannerProps {
   onComplete?: () => void;
 }
 
+function formatDuration(seconds: number): string {
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.round(seconds % 60);
+  if (mins < 60) return `${mins}m ${secs}s`;
+  const hrs = Math.floor(mins / 60);
+  const remainMins = mins % 60;
+  return `${hrs}h ${remainMins}m`;
+}
+
 export default function Scanner({ scanId, onComplete }: ScannerProps) {
   const [status, setStatus] = useState<ScanStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -71,6 +81,9 @@ export default function Scanner({ scanId, onComplete }: ScannerProps) {
   const progress = status.total > 0 ? (status.processed / status.total) * 100 : 0;
   const isComplete = status.status === 'completed';
   const isFailed = status.status === 'failed';
+  const rate = status.elapsed_seconds > 0 && status.processed > 0
+    ? (status.processed / status.elapsed_seconds)
+    : 0;
 
   return (
     <div className={`card ${isFailed ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800' : ''}`}>
@@ -119,6 +132,37 @@ export default function Scanner({ scanId, onComplete }: ScannerProps) {
             </div>
           )}
 
+          {/* Progress percentage and time info */}
+          {!isComplete && !isFailed && status.total > 0 && (
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-600 dark:text-gray-400 mb-2">
+              <span className="font-medium text-gray-900 dark:text-white">
+                {Math.round(progress)}%
+              </span>
+              <span>
+                Elapsed: {formatDuration(status.elapsed_seconds)}
+              </span>
+              {status.eta_seconds != null && status.processed > 0 && (
+                <span>
+                  Remaining: ~{formatDuration(status.eta_seconds)}
+                </span>
+              )}
+              {rate > 0 && (
+                <span>
+                  {rate >= 1
+                    ? `${rate.toFixed(1)} videos/s`
+                    : `${(1 / rate).toFixed(1)}s/video`}
+                </span>
+              )}
+            </div>
+          )}
+
+          {/* Completed summary with elapsed */}
+          {isComplete && (
+            <div className="text-sm text-gray-600 dark:text-gray-400 mb-2">
+              Completed in {formatDuration(status.elapsed_seconds)}
+            </div>
+          )}
+
           {/* Stats */}
           <div className="flex flex-wrap gap-4 text-sm text-gray-600 dark:text-gray-400 mb-2">
             <span>
@@ -126,16 +170,16 @@ export default function Scanner({ scanId, onComplete }: ScannerProps) {
               {status.total} processed
             </span>
             <span className="text-green-600 dark:text-green-400">
-              ✓ {status.successful} successful
+              {status.successful} successful
             </span>
             {status.skipped > 0 && (
               <span className="text-yellow-600 dark:text-yellow-400">
-                ⊘ {status.skipped} skipped
+                {status.skipped} skipped
               </span>
             )}
             {status.failed > 0 && (
               <span className="text-red-600 dark:text-red-400">
-                ✗ {status.failed} failed
+                {status.failed} failed
               </span>
             )}
           </div>

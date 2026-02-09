@@ -1,10 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
-from app.api.deps import get_database
 from app.services.scanner import video_scanner
 from app.config import config_manager
+from app.database import SessionLocal
 
 
 router = APIRouter(prefix="/scan", tags=["scan"])
@@ -42,6 +41,8 @@ class ScanStatusResponse(BaseModel):
     errors: list[str]
     start_time: str
     end_time: str | None
+    elapsed_seconds: float
+    eta_seconds: float | None
 
 
 @router.options("")
@@ -53,19 +54,15 @@ async def scan_options():
 @router.post("", response_model=ScanResponse)
 async def start_scan(
     scan_request: ScanRequest,
-    background_tasks: BackgroundTasks,
-    db: Session = Depends(get_database)
 ):
     """
     Start scanning a directory for videos.
 
-    This operation runs in the background and indexes all video files found
+    This operation runs in a background thread and indexes all video files found
     in the specified directory and its subdirectories.
 
     Args:
         scan_request: Scan request with directory path
-        background_tasks: FastAPI background tasks
-        db: Database session
 
     Returns:
         Scan ID and status for tracking progress
@@ -74,9 +71,9 @@ async def start_scan(
     if scan_request.save_config:
         config_manager.save_config(video_directory=scan_request.directory)
 
-    # Start scan in background
+    # Start scan in background thread
     try:
-        scan_id = video_scanner.start_scan(scan_request.directory, db)
+        scan_id = video_scanner.start_scan(scan_request.directory, SessionLocal)
 
         return ScanResponse(
             status="started",
@@ -118,19 +115,12 @@ async def get_scan_status(scan_id: str):
 
 
 @router.post("/rescan", response_model=ScanResponse)
-async def rescan_directory(
-    background_tasks: BackgroundTasks,
-    db: Session = Depends(get_database)
-):
+async def rescan_directory():
     """
     Rescan the configured video directory.
 
     Scans the directory that was previously configured, adding any new videos
     that have been added since the last scan.
-
-    Args:
-        background_tasks: FastAPI background tasks
-        db: Database session
 
     Returns:
         Scan ID and status for tracking progress
@@ -144,7 +134,7 @@ async def rescan_directory(
     video_dir = config_manager.settings.video_directory
 
     try:
-        scan_id = video_scanner.start_scan(video_dir, db)
+        scan_id = video_scanner.start_scan(video_dir, SessionLocal)
 
         return ScanResponse(
             status="started",

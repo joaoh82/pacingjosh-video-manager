@@ -1,5 +1,6 @@
 'use client';
 
+import { useMemo } from 'react';
 import { Video } from '@/lib/types';
 import VideoCard from './VideoCard';
 
@@ -12,6 +13,52 @@ interface VideoGridProps {
   emptyMessage?: string;
 }
 
+interface VideoGroup {
+  key: string;
+  label: string;
+  videos: Video[];
+}
+
+function groupVideosByMonth(videos: Video[]): VideoGroup[] {
+  const groups = new Map<string, Video[]>();
+
+  for (const video of videos) {
+    const dateStr = video.created_date || video.indexed_date;
+    const date = new Date(dateStr);
+    const year = date.getFullYear();
+    const month = date.getMonth();
+
+    if (isNaN(year)) {
+      const key = 'unknown';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(video);
+      continue;
+    }
+
+    const key = `${year}-${String(month).padStart(2, '0')}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(video);
+  }
+
+  const monthNames = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December',
+  ];
+
+  return Array.from(groups.entries()).map(([key, vids]) => {
+    if (key === 'unknown') {
+      return { key, label: 'Unknown Date', videos: vids };
+    }
+    const [year, monthStr] = key.split('-');
+    const monthIndex = parseInt(monthStr, 10);
+    return {
+      key,
+      label: `${monthNames[monthIndex]} ${year}`,
+      videos: vids,
+    };
+  });
+}
+
 export default function VideoGrid({
   videos,
   isLoading = false,
@@ -20,6 +67,8 @@ export default function VideoGrid({
   onVideoClick,
   emptyMessage = 'No videos found',
 }: VideoGridProps) {
+  const groups = useMemo(() => groupVideosByMonth(videos), [videos]);
+
   if (isLoading) {
     return (
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
@@ -66,15 +115,29 @@ export default function VideoGrid({
   }
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-      {videos.map((video) => (
-        <VideoCard
-          key={video.id}
-          video={video}
-          isSelected={selectedVideos.has(video.id)}
-          onSelect={onVideoSelect}
-          onClick={onVideoClick}
-        />
+    <div className="space-y-8">
+      {groups.map((group) => (
+        <section key={group.key}>
+          <div className="flex items-center gap-3 mb-4">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+              {group.label}
+            </h2>
+            <span className="text-sm text-gray-500 dark:text-gray-400">
+              ({group.videos.length} video{group.videos.length !== 1 ? 's' : ''})
+            </span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+            {group.videos.map((video) => (
+              <VideoCard
+                key={video.id}
+                video={video}
+                isSelected={selectedVideos.has(video.id)}
+                onSelect={onVideoSelect}
+                onClick={onVideoClick}
+              />
+            ))}
+          </div>
+        </section>
       ))}
     </div>
   );

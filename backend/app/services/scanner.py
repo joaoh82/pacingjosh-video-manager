@@ -1,4 +1,5 @@
 import uuid
+import threading
 from pathlib import Path
 from typing import Optional, Callable, Dict, Any
 from datetime import datetime
@@ -33,6 +34,15 @@ class ScanProgress:
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert progress to dictionary."""
+        now = datetime.utcnow()
+        elapsed = (now - self.start_time).total_seconds()
+
+        eta_seconds = None
+        if self.processed_files > 0 and self.total_files > 0:
+            avg_per_file = elapsed / self.processed_files
+            remaining = self.total_files - self.processed_files
+            eta_seconds = round(avg_per_file * remaining, 1)
+
         return {
             "scan_id": self.scan_id,
             "status": self.status,
@@ -45,6 +55,8 @@ class ScanProgress:
             "errors": self.errors[-10:],  # Last 10 errors
             "start_time": self.start_time.isoformat(),
             "end_time": self.end_time.isoformat() if self.end_time else None,
+            "elapsed_seconds": round(elapsed, 1),
+            "eta_seconds": eta_seconds,
         }
 
 
@@ -57,15 +69,15 @@ class VideoScanner:
     def start_scan(
         self,
         directory: str,
-        db: Session,
+        db_factory: Callable[[], Session],
         progress_callback: Optional[Callable[[ScanProgress], None]] = None
     ) -> str:
         """
-        Start scanning a directory for videos.
+        Start scanning a directory for videos in a background thread.
 
         Args:
             directory: Directory path to scan
-            db: Database session
+            db_factory: Callable that creates a new database session
             progress_callback: Optional callback function for progress updates
 
         Returns:
@@ -81,15 +93,21 @@ class VideoScanner:
         progress = ScanProgress(scan_id)
         self.active_scans[scan_id] = progress
 
-        # Start scanning (this would typically be in a background task)
-        try:
-            self._scan_directory(directory, db, progress, progress_callback)
-            progress.status = "completed"
-            progress.end_time = datetime.utcnow()
-        except Exception as e:
-            progress.status = "failed"
-            progress.errors.append(f"Scan failed: {str(e)}")
-            progress.end_time = datetime.utcnow()
+        def _run_scan():
+            db = db_factory()
+            try:
+                self._scan_directory(directory, db, progress, progress_callback)
+                progress.status = "completed"
+                progress.end_time = datetime.utcnow()
+            except Exception as e:
+                progress.status = "failed"
+                progress.errors.append(f"Scan failed: {str(e)}")
+                progress.end_time = datetime.utcnow()
+            finally:
+                db.close()
+
+        thread = threading.Thread(target=_run_scan, daemon=True)
+        thread.start()
 
         return scan_id
 

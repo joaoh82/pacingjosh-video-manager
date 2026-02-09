@@ -7,8 +7,9 @@ import FilterPanel from '@/components/FilterPanel';
 import VideoGrid from '@/components/VideoGrid';
 import VideoModal from '@/components/VideoModal';
 import BulkActions from '@/components/BulkActions';
+import Scanner from '@/components/Scanner';
 import { FilterState, Video } from '@/lib/types';
-import { getConfig, getVideos, getCategories, getTags, getStatistics } from '@/lib/api';
+import { getConfig, getVideos, getCategories, getTags, getStatistics, rescanDirectory } from '@/lib/api';
 
 export default function HomePage() {
   const router = useRouter();
@@ -21,8 +22,7 @@ export default function HomePage() {
   const [tags, setTags] = useState<any[]>([]);
   const [selectedVideo, setSelectedVideo] = useState<Video | null>(null);
   const [selectedVideoIds, setSelectedVideoIds] = useState<Set<number>>(new Set());
-  const [isRescanning, setIsRescanning] = useState(false);
-  const [rescanMessage, setRescanMessage] = useState<string | null>(null);
+  const [rescanScanId, setRescanScanId] = useState<string | null>(null);
 
   const [filters, setFilters] = useState<FilterState>({
     search: '',
@@ -136,37 +136,18 @@ export default function HomePage() {
   };
 
   const handleRescan = async () => {
-    setIsRescanning(true);
-    setRescanMessage(null);
-
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api'}/scan/rescan`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to start rescan');
-      }
-
-      const data = await response.json();
-      setRescanMessage(`Rescan started! Processing videos...`);
-
-      // Reload data after a short delay
-      setTimeout(() => {
-        loadData();
-        loadFilters();
-        setRescanMessage('Rescan completed!');
-        setTimeout(() => setRescanMessage(null), 3000);
-      }, 2000);
-
+      const response = await rescanDirectory();
+      setRescanScanId(response.scan_id);
     } catch (error: any) {
-      setRescanMessage(`Error: ${error.message}`);
-    } finally {
-      setIsRescanning(false);
+      console.error('Failed to start rescan:', error);
     }
+  };
+
+  const handleRescanComplete = () => {
+    setRescanScanId(null);
+    loadData();
+    loadFilters();
   };
 
   if (!isConfigured) {
@@ -192,11 +173,11 @@ export default function HomePage() {
             <div className="flex items-center gap-4">
               <button
                 onClick={handleRescan}
-                disabled={isRescanning}
+                disabled={!!rescanScanId}
                 className="btn btn-secondary text-sm"
                 title="Rescan video directory for new videos"
               >
-                {isRescanning ? '🔄 Scanning...' : '🔄 Rescan'}
+                {rescanScanId ? 'Scanning...' : 'Rescan'}
               </button>
               <button
                 onClick={() => router.push('/settings')}
@@ -210,9 +191,9 @@ export default function HomePage() {
               </div>
             </div>
           </div>
-          {rescanMessage && (
-            <div className="mb-2 p-2 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded text-sm text-blue-900 dark:text-blue-100">
-              {rescanMessage}
+          {rescanScanId && (
+            <div className="mb-2">
+              <Scanner scanId={rescanScanId} onComplete={handleRescanComplete} />
             </div>
           )}
           <SearchBar
