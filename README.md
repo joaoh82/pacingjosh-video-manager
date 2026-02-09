@@ -1,11 +1,14 @@
-# Video Manager
+# PacingJosh Video Manager 🎬
 
-A powerful local-first video indexing and management application for organizing and searching through large video collections.
+A modern, full-stack video indexing and management application for organizing and browsing large video collections. Built for runners, content creators, and anyone managing thousands of videos locally.
 
-![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
+![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.109.0-green.svg)
 ![Next.js](https://img.shields.io/badge/Next.js-14.2.0-black.svg)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.3.3-blue.svg)
+![License](https://img.shields.io/badge/License-MIT-green.svg)
+
+![Video Manager](images/main-screen.png)
 
 ## 🎯 Features
 
@@ -47,77 +50,125 @@ A powerful local-first video indexing and management application for organizing 
 
 ## 📋 Prerequisites
 
-Before you begin, ensure you have the following installed:
+### Required Software
 
-- **Python 3.10+** - [Download](https://www.python.org/downloads/)
-- **Node.js 18+** - [Download](https://nodejs.org/)
-- **FFmpeg** - [Download](https://ffmpeg.org/download.html)
-  - macOS: `brew install ffmpeg`
-  - Ubuntu: `sudo apt install ffmpeg`
-  - Windows: Download from official site
+| Software | Minimum Version | Installation |
+|----------|----------------|--------------|
+| Python | 3.11+ | [python.org](https://www.python.org/downloads/) |
+| Node.js | 18.0+ | [nodejs.org](https://nodejs.org/) |
+| FFmpeg | Latest | See OS-specific instructions below |
+
+### Installing FFmpeg
+
+<details>
+<summary><b>macOS</b></summary>
+
+```bash
+# Using Homebrew
+brew install ffmpeg
+
+# Verify installation
+ffmpeg -version
+```
+</details>
+
+<details>
+<summary><b>Ubuntu/Debian Linux</b></summary>
+
+```bash
+# Install FFmpeg
+sudo apt update
+sudo apt install ffmpeg
+
+# Verify installation
+ffmpeg -version
+```
+</details>
+
+<details>
+<summary><b>Windows</b></summary>
+
+1. Download FFmpeg from [ffmpeg.org](https://ffmpeg.org/download.html#build-windows)
+2. Extract to `C:\ffmpeg`
+3. Add `C:\ffmpeg\bin` to your system PATH
+4. Open a new Command Prompt and verify:
+```cmd
+ffmpeg -version
+```
+</details>
+
+### System Requirements
+
+- **OS**: macOS 10.15+, Ubuntu 20.04+, Windows 10+
+- **RAM**: 2GB minimum (4GB+ recommended)
+- **Disk Space**:
+  - Application: ~50MB
+  - Database: ~1-2MB per 1000 videos
+  - Thumbnails: ~50-100KB per video
 
 ## 🚀 Quick Start
 
-### 1. Clone the Repository
+### macOS / Linux
 
 ```bash
-git clone <repository-url>
-cd video_manager
-```
+# 1. Clone the repository
+git clone https://github.com/joaoh82/pacingjosh-video-manager.git
+cd pacingjosh-video-manager
 
-### 2. Backend Setup
-
-```bash
+# 2. Backend setup
 cd backend
-
-# Create virtual environment
-python -m venv venv
-
-# Activate virtual environment
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 
-# Run the server
-python run.py
-```
-
-Backend will start at **http://localhost:8000**
-
-### 3. Frontend Setup
-
-Open a new terminal:
-
-```bash
+# 3. Frontend setup (in new terminal)
 cd frontend
-
-# Install dependencies
 npm install
-# or
-yarn install
-# or
-pnpm install
-
-# Create environment file
 cp .env.example .env.local
 
-# Run development server
-npm run dev
-# or
-yarn dev
+# 4. Run backend (Terminal 1)
+cd backend && source venv/bin/activate && python run.py
+
+# 5. Run frontend (Terminal 2)
+cd frontend && npm run dev
 ```
 
-Frontend will start at **http://localhost:3000**
+### Windows
 
-### 4. First-Time Setup
+```powershell
+# 1. Clone the repository
+git clone https://github.com/joaoh82/pacingjosh-video-manager.git
+cd pacingjosh-video-manager
 
-1. Open http://localhost:3000 in your browser
+# 2. Backend setup
+cd backend
+python -m venv venv
+.\venv\Scripts\activate
+pip install -r requirements.txt
+
+# 3. Frontend setup (in new PowerShell window)
+cd frontend
+npm install
+copy .env.example .env.local
+
+# 4. Run backend (PowerShell 1)
+cd backend
+.\venv\Scripts\activate
+python run.py
+
+# 5. Run frontend (PowerShell 2)
+cd frontend
+npm run dev
+```
+
+### First-Time Setup
+
+1. Open **http://localhost:3000** in your browser
 2. You'll be redirected to the setup page
-3. Enter the path to your video directory
+3. Click **"📁 Browse..."** to select your video directory (or type the path)
 4. Click **"Start Scanning"**
 5. Wait for the scan to complete
-6. Start browsing your videos!
+6. Start browsing your videos! 🎉
 
 ## 📖 Usage
 
@@ -168,19 +219,19 @@ Frontend will start at **http://localhost:3000**
 
 ## 🎨 Screenshots
 
-### Main Interface
-- Grid view with thumbnails
-- Sidebar with filters
-- Search bar at top
+### Main Video Grid
+![Video Grid](images/video-grid.png)
+*Browse your video collection with thumbnails and metadata*
 
-### Video Modal
-- Full-screen video player
-- Metadata display and editing
-- Technical details
+### Video Player Modal
+![Video Player](images/video-modal.png)
+*Watch videos and edit metadata in a sleek modal interface*
 
-### Setup Page
-- Clean onboarding experience
-- Real-time scan progress
+### Settings Page
+![Settings](images/settings.png)
+*Configure video directory and thumbnail preferences*
+
+> **Note**: Screenshots show the application with sample video data. Your interface will look similar with your own videos.
 
 ## 🔧 Configuration
 
@@ -395,19 +446,51 @@ For issues, questions, or suggestions:
 - Check existing documentation
 - Review troubleshooting guide
 
-## 🔮 Future Enhancements
+## 🔮 Roadmap
 
-- [ ] Video editing capabilities
-- [ ] Advanced search with filters
-- [ ] Export/import functionality
-- [ ] Video analytics and statistics
+Future enhancements planned:
+
 - [ ] Playlist management
-- [ ] Mobile app
+- [ ] Video analytics and statistics dashboard
+- [ ] Export/import functionality
+- [ ] Mobile app companion
 - [ ] Cloud storage integration
-- [ ] Face detection and recognition
-- [ ] Audio transcription
-- [ ] Video sharing
+- [ ] Advanced AI features (face detection, transcription)
+- [ ] Collaborative features and sharing
+
+## 🤝 Contributing
+
+Contributions, issues, and feature requests are welcome!
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🙏 Acknowledgments
+
+- Built with [FastAPI](https://fastapi.tiangolo.com/)
+- Powered by [FFmpeg](https://ffmpeg.org/)
+- UI framework by [Next.js](https://nextjs.org/)
+- Styled with [Tailwind CSS](https://tailwindcss.com/)
+
+## 📧 Contact
+
+**João Henrique Machado Silva** - [@joaoh82](https://github.com/joaoh82)
+
+Project Link: [https://github.com/joaoh82/pacingjosh-video-manager](https://github.com/joaoh82/pacingjosh-video-manager)
 
 ---
 
-**Built with ❤️ for video enthusiasts**
+<div align="center">
+
+**Made for runners who love tracking their journey** 🏃‍♂️
+
+*If you find this project helpful, please consider giving it a ⭐️*
+
+</div>
