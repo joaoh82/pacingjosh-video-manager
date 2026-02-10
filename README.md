@@ -1,4 +1,6 @@
-# PacingJosh Video Manager 🎬
+<div align="center">
+
+<img src="images/Logo.png" alt="Video Log Manager" width="500" />
 
 A modern, full-stack video indexing and management application for organizing and browsing large video collections. Built for runners, content creators, and anyone managing thousands of videos locally.
 
@@ -10,47 +12,54 @@ Created to help manage my own videos for my Youtube Channel [Pacing Josh](https:
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.3.3-blue.svg)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
 
-![Video Manager](images/main-screen.png)
+</div>
 
-## 🎯 Features
+![Video Log Manager](images/main-screen.png)
+
+## Features
 
 ### Video Management
-- 📁 **Recursive Directory Scanning** - Automatically index videos from any directory structure
-- 🖼️ **Thumbnail Generation** - Auto-generate multiple thumbnails per video for quick preview
-- 🎬 **Video Streaming** - Built-in video player with seeking support
-- 📊 **Metadata Extraction** - Extract duration, resolution, FPS, codec, and more using FFmpeg
+- **Recursive Directory Scanning** - Automatically index videos from any directory structure
+- **Thumbnail Generation** - Auto-generate multiple thumbnails per video for quick preview
+- **Video Streaming** - Built-in video player with seeking support
+- **Metadata Extraction** - Extract duration, resolution, FPS, codec, and more using FFmpeg
 
 ### Organization & Search
-- 🔍 **Full-Text Search** - Search across filenames, locations, and notes
-- 🏷️ **Tagging System** - Multi-tag support with tag management
-- 📂 **Categories** - Organize videos into categories
-- 📅 **Date Filtering** - Filter by date range
-- 📝 **Notes** - Add detailed notes to each video
+- **Full-Text Search** - Search across filenames, locations, and notes
+- **Tagging System** - Multi-tag support with tag management
+- **Categories** - Organize videos into categories
+- **Date Filtering** - Filter by date range
+- **Notes** - Add detailed notes to each video
+
+### Productions
+- **Production Tracking** - Create and manage productions (YouTube, TikTok, Instagram, etc.)
+- **Many-to-Many Linking** - Link any video to multiple productions and vice versa
+- **Platform & Status** - Track platform, publish link, and draft/published status per production
+- **Production Filtering** - Filter the video grid by production to see which clips belong where
 
 ### Advanced Features
-- ✏️ **Metadata Editing** - Edit all metadata inline
-- 📦 **Bulk Operations** - Update multiple videos at once
-- 🔄 **Real-Time Progress** - Live scanning progress with detailed status
-- 🎨 **Modern UI** - Clean, responsive interface with dark mode
-- 💾 **SQLite Database** - Fast, reliable local storage
+- **Metadata Editing** - Edit all metadata inline
+- **Bulk Operations** - Update categories, tags, and production assignments across multiple videos at once
+- **Real-Time Progress** - Live scanning progress with ETA and per-file status
+- **Dark Mode** - Clean, responsive interface with dark mode
+- **SQLite Database** - Fast, reliable local storage
+- **Auto-Setup** - Data directories are created automatically on first run
 
-## 🏗️ Architecture
+## Architecture
 
 **Backend:**
 - FastAPI (Python) - REST API
 - SQLite - Database
 - SQLAlchemy - ORM
 - FFmpeg - Video processing
-- Alembic - Migrations
 
 **Frontend:**
 - Next.js 14 (App Router)
 - React 18
 - TypeScript
 - Tailwind CSS
-- TanStack Query
 
-## 📋 Prerequisites
+## Prerequisites
 
 ### Required Software
 
@@ -108,7 +117,7 @@ ffmpeg -version
   - Database: ~1-2MB per 1000 videos
   - Thumbnails: ~50-100KB per video
 
-## 🚀 Quick Start
+## Quick Start
 
 ### macOS / Linux
 
@@ -167,12 +176,12 @@ npm run dev
 
 1. Open **http://localhost:3000** in your browser
 2. You'll be redirected to the setup page
-3. Click **"📁 Browse..."** to select your video directory (or type the path)
+3. Click **"Browse..."** to select your video directory (or type the path)
 4. Click **"Start Scanning"**
 5. Wait for the scan to complete
-6. Start browsing your videos! 🎉
+6. Start browsing your videos!
 
-## 📖 Usage
+## Usage
 
 ### Scanning Videos
 
@@ -183,33 +192,40 @@ npm run dev
 - Supported formats: .mp4, .mov, .avi, .mkv, .webm, .flv, .wmv
 
 **Rescanning:**
-- Use the backend API: `POST /api/scan/rescan`
-- Or manually trigger from the frontend
+- Click the **"Rescan"** button in the header to pick up new or changed files
+- Progress is shown in real time with ETA
 
 ### Searching and Filtering
 
 **Search:**
 - Use the search bar to find videos by filename, location, or notes
-- Search is debounced for performance
 
 **Filters:**
 - **Category** - Filter by video category
-- **Tags** - Select multiple tags (AND logic)
+- **Production** - Filter by production to see which clips belong to a specific project
+- **Tags** - Select multiple tags
 - **Date Range** - Filter by creation date
-- **Sort** - 8 different sorting options
+- **Sort** - Multiple sorting options (date, name, size, duration)
+
+### Managing Productions
+
+1. Click **"Productions"** in the header to open the production manager
+2. Create a production with a title, platform (YouTube, TikTok, etc.), and optional link
+3. Mark productions as published or draft
+4. Link videos to productions from the video detail modal or via bulk edit
 
 ### Editing Metadata
 
 **Single Video:**
 1. Click on any video card
 2. Click **"Edit"** in the modal
-3. Update category, location, tags, or notes
+3. Update category, location, tags, notes, or linked productions
 4. Click **"Save"**
 
 **Bulk Edit:**
-1. Select multiple videos (checkboxes)
+1. Select multiple videos using the checkboxes
 2. Click **"Bulk Edit"** in the bottom toolbar
-3. Set category, add/remove tags
+3. Set category, add/remove tags, add/remove production assignments
 4. Click **"Apply Changes"**
 
 ### Watching Videos
@@ -219,23 +235,33 @@ npm run dev
 - Seeking and playback controls included
 - Videos stream directly from your local files
 
-## 🎨 Screenshots
+## Screenshots
 
-### Main Video Grid
+### Main Screen
+![Main Screen](images/main-screen.png)
+*Browse your video collection with thumbnails, tags, and production badges*
+
+### Video Grid
 ![Video Grid](images/video-grid.png)
-*Browse your video collection with thumbnails and metadata*
+*Video cards show duration, resolution, file size, tags, and linked productions*
 
 ### Video Player Modal
 ![Video Player](images/video-modal.png)
 *Watch videos and edit metadata in a sleek modal interface*
 
+### Production Manager
+![Productions](images/production.png)
+*Create and manage productions with platform, link, and publish status*
+
+### Scanning Progress
+![Scanning](images/scanning.png)
+*Real-time scanning progress with ETA and per-file status*
+
 ### Settings Page
 ![Settings](images/settings.png)
 *Configure video directory and thumbnail preferences*
 
-> **Note**: Screenshots show the application with sample video data. Your interface will look similar with your own videos.
-
-## 🔧 Configuration
+## Configuration
 
 ### Backend Configuration
 
@@ -267,7 +293,7 @@ Edit `frontend/.env.local`:
 NEXT_PUBLIC_API_URL=http://localhost:8000/api
 ```
 
-## 📚 API Documentation
+## API Documentation
 
 Once the backend is running, visit:
 - **Interactive Docs**: http://localhost:8000/docs
@@ -276,19 +302,23 @@ Once the backend is running, visit:
 ### Key Endpoints
 
 ```
-POST   /api/scan              - Start directory scan
-GET    /api/scan/status/{id}  - Get scan progress
-GET    /api/videos            - List/search videos
-GET    /api/videos/{id}       - Get video details
-PUT    /api/videos/{id}       - Update video
-POST   /api/videos/bulk-update - Bulk update
-GET    /api/tags              - List all tags
-GET    /api/tags/categories   - List all categories
-GET    /api/stream/{id}       - Stream video
+POST   /api/scan                    - Start directory scan
+GET    /api/scan/status/{id}        - Get scan progress
+GET    /api/videos                  - List/search videos
+GET    /api/videos/{id}             - Get video details
+PUT    /api/videos/{id}             - Update video metadata
+POST   /api/videos/bulk-update      - Bulk update videos
+GET    /api/tags                    - List all tags
+GET    /api/tags/categories         - List all categories
+GET    /api/productions             - List all productions
+POST   /api/productions             - Create production
+PUT    /api/productions/{id}        - Update production
+DELETE /api/productions/{id}        - Delete production
+GET    /api/stream/{id}             - Stream video
 GET    /api/thumbnails/{id}/{index} - Get thumbnail
 ```
 
-## 🗄️ Database Schema
+## Database Schema
 
 ### Tables
 
@@ -306,7 +336,13 @@ GET    /api/thumbnails/{id}/{index} - Get thumbnail
 **video_tags**
 - video_id, tag_id (junction table)
 
-## 🛠️ Development
+**productions**
+- id, title, platform, link, is_published
+
+**video_productions**
+- video_id, production_id (junction table)
+
+## Development
 
 ### Project Structure
 
@@ -318,21 +354,19 @@ video_manager/
 │   │   ├── models/         # SQLAlchemy models
 │   │   ├── schemas/        # Pydantic schemas
 │   │   ├── services/       # Business logic
-│   │   ├── utils/          # Utilities
 │   │   ├── config.py       # Configuration
 │   │   ├── database.py     # Database setup
 │   │   └── main.py         # FastAPI app
-│   ├── alembic/            # Database migrations
-│   └── tests/              # Tests
+│   └── data/
+│       ├── database.db     # SQLite database
+│       └── thumbnails/     # Generated thumbnails
 ├── frontend/
 │   └── src/
 │       ├── app/            # Next.js pages
 │       ├── components/     # React components
 │       ├── lib/            # API client & types
 │       └── styles/         # Global styles
-└── data/
-    ├── database.db         # SQLite database
-    └── thumbnails/         # Generated thumbnails
+└── images/                 # Screenshots & branding
 ```
 
 ### Running Tests
@@ -349,25 +383,7 @@ cd frontend
 npm test
 ```
 
-### Database Migrations
-
-**Create a new migration:**
-```bash
-cd backend
-alembic revision --autogenerate -m "Description"
-```
-
-**Apply migrations:**
-```bash
-alembic upgrade head
-```
-
-**Rollback:**
-```bash
-alembic downgrade -1
-```
-
-## 🐛 Troubleshooting
+## Troubleshooting
 
 ### FFmpeg Not Found
 **Error:** `FFmpeg is not installed or not in PATH`
@@ -406,53 +422,21 @@ lsof -ti:3000 | xargs kill  # Frontend
 1. Check if videos are in supported formats
 2. Verify file permissions
 3. Check backend logs for errors
-4. Try rescanning: `POST /api/scan/rescan`
+4. Try rescanning via the Rescan button
 
 ### Thumbnails Not Loading
 **Issue:** Video cards show placeholder icon
 
 **Solution:**
-1. Check `data/thumbnails/` directory exists
+1. The `data/thumbnails/` directory is created automatically on startup
 2. Verify FFmpeg can read your video files
 3. Check browser console for 404 errors
 4. Rescan to regenerate thumbnails
 
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-### Development Workflow
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## 📝 License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## 🙏 Acknowledgments
-
-- **FastAPI** - Modern Python web framework
-- **Next.js** - React framework
-- **FFmpeg** - Video processing
-- **SQLAlchemy** - SQL toolkit
-- **Tailwind CSS** - Utility-first CSS
-
-## 📧 Support
-
-For issues, questions, or suggestions:
-- Open an issue on GitHub
-- Check existing documentation
-- Review troubleshooting guide
-
-## 🔮 Roadmap
+## Roadmap
 
 Future enhancements planned:
 
-- [ ] Playlist management
 - [ ] Video analytics and statistics dashboard
 - [ ] Export/import functionality
 - [ ] Mobile app companion
@@ -460,7 +444,7 @@ Future enhancements planned:
 - [ ] Advanced AI features (face detection, transcription)
 - [ ] Collaborative features and sharing
 
-## 🤝 Contributing
+## Contributing
 
 Contributions, issues, and feature requests are welcome!
 
@@ -470,20 +454,20 @@ Contributions, issues, and feature requests are welcome!
 4. Push to the branch (`git push origin feature/AmazingFeature`)
 5. Open a Pull Request
 
-## 📄 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - Built with [FastAPI](https://fastapi.tiangolo.com/)
 - Powered by [FFmpeg](https://ffmpeg.org/)
 - UI framework by [Next.js](https://nextjs.org/)
 - Styled with [Tailwind CSS](https://tailwindcss.com/)
 
-## 📧 Contact
+## Contact
 
-**João Henrique Machado Silva** - [@joaoh82](https://github.com/joaoh82)
+**Joao Henrique Machado Silva** - [@joaoh82](https://github.com/joaoh82)
 
 Project Link: [https://github.com/joaoh82/pacingjosh-video-manager](https://github.com/joaoh82/pacingjosh-video-manager)
 
@@ -491,8 +475,8 @@ Project Link: [https://github.com/joaoh82/pacingjosh-video-manager](https://gith
 
 <div align="center">
 
-**Made for runners who love tracking their journey** 🏃‍♂️
+**Made for runners who love tracking their journey**
 
-*If you find this project helpful, please consider giving it a ⭐️*
+*If you find this project helpful, please consider giving it a star!*
 
 </div>

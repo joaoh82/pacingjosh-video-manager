@@ -74,9 +74,11 @@ export default function SetupPage() {
     <div className="min-h-screen flex items-center justify-center p-4">
       <div className="w-full max-w-2xl">
         <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold text-gray-900 dark:text-white mb-2">
-            Welcome to Video Manager
-          </h1>
+          <img
+            src="/logo.png"
+            alt="Video Log Manager"
+            className="h-16 mx-auto mb-2"
+          />
           <p className="text-lg text-gray-600 dark:text-gray-400">
             Let's get started by indexing your videos
           </p>

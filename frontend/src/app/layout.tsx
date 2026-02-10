@@ -5,7 +5,7 @@ import '@/styles/globals.css';
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'Video Manager',
+  title: 'Video Log Manager',
   description: 'Video indexing and management application',
 };
 
