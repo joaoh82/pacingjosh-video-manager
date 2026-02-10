@@ -8,8 +8,9 @@ import VideoGrid from '@/components/VideoGrid';
 import VideoModal from '@/components/VideoModal';
 import BulkActions from '@/components/BulkActions';
 import Scanner from '@/components/Scanner';
-import { FilterState, Video } from '@/lib/types';
-import { getConfig, getVideos, getCategories, getTags, getStatistics, rescanDirectory } from '@/lib/api';
+import ProductionManager from '@/components/ProductionManager';
+import { FilterState, Video, Production } from '@/lib/types';
+import { getConfig, getVideos, getCategories, getTags, getProductions, getStatistics, rescanDirectory } from '@/lib/api';
 
 export default function HomePage() {
   const router = useRouter();
@@ -20,14 +21,17 @@ export default function HomePage() {
   const [totalPages, setTotalPages] = useState(0);
   const [categories, setCategories] = useState<any[]>([]);
   const [tags, setTags] = useState<any[]>([]);
+  const [productions, setProductions] = useState<Production[]>([]);
   const [selectedVideo, setSelectedVideo] = useState<Video | null>(null);
   const [selectedVideoIds, setSelectedVideoIds] = useState<Set<number>>(new Set());
   const [rescanScanId, setRescanScanId] = useState<string | null>(null);
+  const [showProductionManager, setShowProductionManager] = useState(false);
 
   const [filters, setFilters] = useState<FilterState>({
     search: '',
     category: '',
     tags: [],
+    production: null,
     dateFrom: null,
     dateTo: null,
     sort: 'date_desc',
@@ -88,12 +92,14 @@ export default function HomePage() {
 
   const loadFilters = async () => {
     try {
-      const [categoriesData, tagsData] = await Promise.all([
+      const [categoriesData, tagsData, productionsData] = await Promise.all([
         getCategories(),
         getTags(),
+        getProductions(),
       ]);
       setCategories(categoriesData);
       setTags(tagsData);
+      setProductions(productionsData);
     } catch (error) {
       console.error('Failed to load filters:', error);
     }
@@ -109,6 +115,7 @@ export default function HomePage() {
       search: '',
       category: '',
       tags: [],
+      production: null,
       dateFrom: null,
       dateTo: null,
       sort: 'date_desc',
@@ -172,6 +179,13 @@ export default function HomePage() {
             </h1>
             <div className="flex items-center gap-4">
               <button
+                onClick={() => setShowProductionManager(true)}
+                className="btn btn-secondary text-sm"
+                title="Manage productions"
+              >
+                Productions
+              </button>
+              <button
                 onClick={handleRescan}
                 disabled={!!rescanScanId}
                 className="btn btn-secondary text-sm"
@@ -184,7 +198,7 @@ export default function HomePage() {
                 className="btn btn-secondary text-sm"
                 title="Settings"
               >
-                ⚙️ Settings
+                Settings
               </button>
               <div className="text-sm text-gray-600 dark:text-gray-400">
                 {totalVideos} video{totalVideos !== 1 ? 's' : ''}
@@ -217,6 +231,7 @@ export default function HomePage() {
                   filters={filters}
                   categories={categories}
                   tags={tags}
+                  productions={productions}
                   onFilterChange={handleFilterChange}
                   onClearFilters={handleClearFilters}
                 />
@@ -272,6 +287,15 @@ export default function HomePage() {
           }}
         />
       )}
+
+      {/* Production Manager Modal */}
+      <ProductionManager
+        isOpen={showProductionManager}
+        onClose={() => setShowProductionManager(false)}
+        onUpdate={() => {
+          loadFilters();
+        }}
+      />
 
       {/* Bulk Actions */}
       <BulkActions

@@ -34,6 +34,10 @@ def get_db():
 
 
 def init_db():
-    """Initialize database by creating all tables."""
-    from app.models import Video, Metadata, Tag, VideoTag, VideoUsage
+    """Initialize database by creating all tables and required directories."""
+    # Ensure data directories exist on first run
+    config_manager.get_database_path()
+    config_manager.get_thumbnail_directory()
+
+    from app.models import Video, Metadata, Tag, VideoTag, Production, VideoProduction
     Base.metadata.create_all(bind=engine)

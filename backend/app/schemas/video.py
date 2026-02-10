@@ -2,6 +2,8 @@ from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel, Field
 
+from app.schemas.production import ProductionBriefResponse
+
 
 class VideoBase(BaseModel):
     """Base video schema with common fields."""
@@ -21,24 +23,6 @@ class VideoCreate(VideoBase):
     file_path: str
 
 
-class UsageEntry(BaseModel):
-    """Schema for a single usage entry in update requests."""
-
-    title: str
-    link: str
-
-
-class UsageResponse(BaseModel):
-    """Schema for a usage entry in video responses."""
-
-    id: int
-    title: str
-    link: str
-
-    class Config:
-        from_attributes = True
-
-
 class VideoUpdate(BaseModel):
     """Schema for updating video metadata."""
 
@@ -46,7 +30,7 @@ class VideoUpdate(BaseModel):
     location: Optional[str] = None
     notes: Optional[str] = None
     tags: Optional[list[str]] = None
-    usages: Optional[list[UsageEntry]] = None
+    production_ids: Optional[list[int]] = None
 
 
 class MetadataResponse(BaseModel):
@@ -79,7 +63,7 @@ class VideoResponse(VideoBase):
     thumbnail_count: int
     metadata: Optional[MetadataResponse] = Field(None, alias='video_metadata')
     tags: list[TagResponse] = []
-    usages: list[UsageResponse] = Field(default=[], alias='video_usages')
+    productions: list[ProductionBriefResponse] = []
 
     class Config:
         from_attributes = True
@@ -105,6 +89,8 @@ class BulkUpdateRequest(BaseModel):
     notes: Optional[str] = None
     add_tags: Optional[list[str]] = None
     remove_tags: Optional[list[str]] = None
+    add_production_ids: Optional[list[int]] = None
+    remove_production_ids: Optional[list[int]] = None
 
 
 class BulkUpdateResponse(BaseModel):

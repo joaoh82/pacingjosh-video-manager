@@ -168,6 +168,30 @@ export default function VideoCard({
           </div>
         )}
 
+        {/* Productions */}
+        {video.productions && video.productions.length > 0 && (
+          <div className="flex flex-wrap gap-1 mb-2">
+            {video.productions.slice(0, 2).map((prod) => (
+              <span
+                key={prod.id}
+                className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300"
+              >
+                {prod.title}
+                {prod.platform && (
+                  <span className="text-purple-500 dark:text-purple-400">
+                    ({prod.platform})
+                  </span>
+                )}
+              </span>
+            ))}
+            {video.productions.length > 2 && (
+              <span className="badge badge-gray text-xs">
+                +{video.productions.length - 2}
+              </span>
+            )}
+          </div>
+        )}
+
         {/* Category */}
         {video.metadata?.category && (
           <div className="text-sm text-gray-600 dark:text-gray-400">

@@ -1,11 +1,12 @@
 'use client';
 
-import { FilterState, SortOption, Category, TagWithCount } from '@/lib/types';
+import { FilterState, SortOption, Category, TagWithCount, Production } from '@/lib/types';
 
 interface FilterPanelProps {
   filters: FilterState;
   categories: Category[];
   tags: TagWithCount[];
+  productions: Production[];
   onFilterChange: (filters: Partial<FilterState>) => void;
   onClearFilters: () => void;
 }
@@ -14,6 +15,7 @@ export default function FilterPanel({
   filters,
   categories,
   tags,
+  productions,
   onFilterChange,
   onClearFilters,
 }: FilterPanelProps) {
@@ -38,6 +40,7 @@ export default function FilterPanel({
   const hasActiveFilters =
     filters.category ||
     filters.tags.length > 0 ||
+    filters.production !== null ||
     filters.dateFrom ||
     filters.dateTo;
 
@@ -75,6 +78,27 @@ export default function FilterPanel({
           {categories.map((cat) => (
             <option key={cat.name} value={cat.name}>
               {cat.name} ({cat.count})
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {/* Production Filter */}
+      <div>
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+          Production
+        </label>
+        <select
+          value={filters.production ?? ''}
+          onChange={(e) =>
+            onFilterChange({ production: e.target.value ? Number(e.target.value) : null })
+          }
+          className="input"
+        >
+          <option value="">All Productions</option>
+          {productions.map((prod) => (
+            <option key={prod.id} value={prod.id}>
+              {prod.title} ({prod.video_count ?? 0})
             </option>
           ))}
         </select>

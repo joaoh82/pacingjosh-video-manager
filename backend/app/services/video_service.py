@@ -2,7 +2,7 @@ from typing import Optional, List
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 
-from app.models import Video, Metadata, Tag, VideoTag, VideoUsage
+from app.models import Video, Metadata, Tag, VideoTag, VideoProduction
 from app.schemas.video import VideoUpdate, BulkUpdateRequest
 
 
@@ -25,7 +25,7 @@ class VideoService:
             .options(
                 joinedload(Video.video_metadata),
                 joinedload(Video.video_tags).joinedload(VideoTag.tag),
-                joinedload(Video.video_usages)
+                joinedload(Video.video_productions).joinedload(VideoProduction.production)
             )
             .filter(Video.id == video_id)
             .first()
@@ -81,13 +81,14 @@ class VideoService:
         if update_data.tags is not None:
             self._update_video_tags(db, video, update_data.tags)
 
-        # Update usages
-        if update_data.usages is not None:
-            self._update_video_usages(db, video, update_data.usages)
+        # Update productions
+        if update_data.production_ids is not None:
+            self._update_video_productions(db, video, update_data.production_ids)
 
         db.commit()
-        db.refresh(video)
-        return video
+
+        # Re-fetch to ensure all relationships are fresh
+        return self.get_video(db, video_id)
 
     def bulk_update_videos(
         self,
@@ -106,7 +107,11 @@ class VideoService:
         """
         videos = (
             db.query(Video)
-            .options(joinedload(Video.video_metadata))
+            .options(
+                joinedload(Video.video_metadata),
+                joinedload(Video.video_tags),
+                joinedload(Video.video_productions),
+            )
             .filter(Video.id.in_(bulk_update.video_ids))
             .all()
         )
@@ -132,6 +137,14 @@ class VideoService:
             # Remove tags
             if bulk_update.remove_tags:
                 self._remove_tags_from_video(db, video, bulk_update.remove_tags)
+
+            # Add productions
+            if bulk_update.add_production_ids:
+                self._add_productions_to_video(db, video, bulk_update.add_production_ids)
+
+            # Remove productions
+            if bulk_update.remove_production_ids:
+                self._remove_productions_from_video(db, video, bulk_update.remove_production_ids)
 
         db.commit()
         return len(videos)
@@ -232,26 +245,37 @@ class VideoService:
             db.flush()
         return tag
 
-    def _update_video_usages(self, db: Session, video: Video, usages: list) -> None:
+    def _update_video_productions(self, db: Session, video: Video, production_ids: List[int]) -> None:
         """
-        Replace all usages for a video.
+        Replace all production links for a video.
 
         Args:
             db: Database session
             video: Video object
-            usages: List of UsageEntry objects with title and link
+            production_ids: List of production IDs to link
         """
-        # Remove existing usages
-        db.query(VideoUsage).filter(VideoUsage.video_id == video.id).delete()
+        # Remove existing production links
+        db.query(VideoProduction).filter(VideoProduction.video_id == video.id).delete()
 
-        # Add new usages
-        for usage in usages:
-            video_usage = VideoUsage(
-                video_id=video.id,
-                title=usage.title,
-                link=usage.link
-            )
-            db.add(video_usage)
+        # Add new production links
+        for production_id in production_ids:
+            vp = VideoProduction(video_id=video.id, production_id=production_id)
+            db.add(vp)
+
+    def _add_productions_to_video(self, db: Session, video: Video, production_ids: List[int]) -> None:
+        """Add productions to a video (doesn't remove existing)."""
+        existing_prod_ids = {vp.production_id for vp in video.video_productions}
+        for prod_id in production_ids:
+            if prod_id not in existing_prod_ids:
+                vp = VideoProduction(video_id=video.id, production_id=prod_id)
+                db.add(vp)
+
+    def _remove_productions_from_video(self, db: Session, video: Video, production_ids: List[int]) -> None:
+        """Remove productions from a video."""
+        db.query(VideoProduction).filter(
+            VideoProduction.video_id == video.id,
+            VideoProduction.production_id.in_(production_ids)
+        ).delete(synchronize_session=False)
 
     def get_all_categories(self, db: Session) -> List[dict]:
         """

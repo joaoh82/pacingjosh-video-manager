@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 from app.config import settings
 from app.database import init_db
-from app.api.routes import scan, videos, tags, stream
+from app.api.routes import scan, videos, tags, stream, productions
 
 
 @asynccontextmanager
@@ -60,6 +60,7 @@ app.include_router(scan.router, prefix="/api")
 app.include_router(videos.router, prefix="/api")
 app.include_router(tags.router, prefix="/api")
 app.include_router(stream.router, prefix="/api")
+app.include_router(productions.router, prefix="/api")
 
 
 @app.get("/")

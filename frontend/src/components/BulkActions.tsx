@@ -1,7 +1,8 @@
 'use client';
 
-import { useState } from 'react';
-import { bulkUpdateVideos, BulkUpdateRequest } from '@/lib/api';
+import { useState, useEffect } from 'react';
+import { Production } from '@/lib/types';
+import { bulkUpdateVideos, BulkUpdateRequest, getProductions } from '@/lib/api';
 
 interface BulkActionsProps {
   selectedCount: number;
@@ -21,8 +22,29 @@ export default function BulkActions({
   const [category, setCategory] = useState('');
   const [addTags, setAddTags] = useState('');
   const [removeTags, setRemoveTags] = useState('');
+  const [allProductions, setAllProductions] = useState<Production[]>([]);
+  const [addProductionIds, setAddProductionIds] = useState<number[]>([]);
+  const [removeProductionIds, setRemoveProductionIds] = useState<number[]>([]);
+
+  useEffect(() => {
+    if (isOpen) {
+      getProductions().then(setAllProductions).catch(() => {});
+    }
+  }, [isOpen]);
 
   if (selectedCount === 0) return null;
+
+  const toggleAddProduction = (id: number) => {
+    setAddProductionIds((prev) =>
+      prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]
+    );
+  };
+
+  const toggleRemoveProduction = (id: number) => {
+    setRemoveProductionIds((prev) =>
+      prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id]
+    );
+  };
 
   const handleBulkUpdate = async () => {
     if (selectedVideoIds.length === 0) return;
@@ -40,6 +62,12 @@ export default function BulkActions({
       if (removeTags) {
         request.remove_tags = removeTags.split(',').map((t) => t.trim()).filter(Boolean);
       }
+      if (addProductionIds.length > 0) {
+        request.add_production_ids = addProductionIds;
+      }
+      if (removeProductionIds.length > 0) {
+        request.remove_production_ids = removeProductionIds;
+      }
 
       await bulkUpdateVideos(request);
 
@@ -47,6 +75,8 @@ export default function BulkActions({
       setCategory('');
       setAddTags('');
       setRemoveTags('');
+      setAddProductionIds([]);
+      setRemoveProductionIds([]);
       setIsOpen(false);
       onClearSelection();
       onUpdate();
@@ -130,6 +160,64 @@ export default function BulkActions({
                 />
               </div>
             </div>
+
+            {/* Productions */}
+            {allProductions.length > 0 && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Add to Productions
+                  </label>
+                  <div className="max-h-36 overflow-y-auto border border-gray-300 dark:border-gray-600 rounded-lg p-2 space-y-1">
+                    {allProductions.map((prod) => (
+                      <label
+                        key={prod.id}
+                        className="flex items-center space-x-2 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600 p-1 rounded text-sm"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={addProductionIds.includes(prod.id)}
+                          onChange={() => toggleAddProduction(prod.id)}
+                          className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                        />
+                        <span className="text-gray-700 dark:text-gray-300 truncate">
+                          {prod.title}
+                          {prod.platform && (
+                            <span className="text-gray-500 dark:text-gray-400"> ({prod.platform})</span>
+                          )}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Remove from Productions
+                  </label>
+                  <div className="max-h-36 overflow-y-auto border border-gray-300 dark:border-gray-600 rounded-lg p-2 space-y-1">
+                    {allProductions.map((prod) => (
+                      <label
+                        key={prod.id}
+                        className="flex items-center space-x-2 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-600 p-1 rounded text-sm"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={removeProductionIds.includes(prod.id)}
+                          onChange={() => toggleRemoveProduction(prod.id)}
+                          className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                        />
+                        <span className="text-gray-700 dark:text-gray-300 truncate">
+                          {prod.title}
+                          {prod.platform && (
+                            <span className="text-gray-500 dark:text-gray-400"> ({prod.platform})</span>
+                          )}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div className="flex justify-end gap-2 mt-4">
               <button

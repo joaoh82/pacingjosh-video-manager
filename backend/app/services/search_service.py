@@ -3,7 +3,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_, and_, func
 
-from app.models import Video, Metadata, Tag, VideoTag, VideoUsage
+from app.models import Video, Metadata, Tag, VideoTag, VideoProduction
 
 
 class SearchService:
@@ -15,6 +15,7 @@ class SearchService:
         search: Optional[str] = None,
         category: Optional[str] = None,
         tags: Optional[List[str]] = None,
+        production_id: Optional[int] = None,
         date_from: Optional[datetime] = None,
         date_to: Optional[datetime] = None,
         sort: str = "date_desc",
@@ -29,9 +30,10 @@ class SearchService:
             search: Search term for filename, location, and notes
             category: Filter by category
             tags: Filter by tags (videos must have all specified tags)
+            production_id: Filter by production
             date_from: Filter by creation date from
             date_to: Filter by creation date to
-            sort: Sort order (date_desc, date_asc, name_asc, name_desc, duration_desc, duration_asc)
+            sort: Sort order
             page: Page number (1-based)
             limit: Results per page
 
@@ -42,7 +44,7 @@ class SearchService:
         query = db.query(Video).options(
             joinedload(Video.video_metadata),
             joinedload(Video.video_tags).joinedload(VideoTag.tag),
-            joinedload(Video.video_usages)
+            joinedload(Video.video_productions).joinedload(VideoProduction.production)
         )
 
         # Apply search filter
@@ -74,6 +76,15 @@ class SearchService:
                     .subquery()
                 )
                 query = query.filter(Video.id.in_(tag_subquery))
+
+        # Apply production filter
+        if production_id is not None:
+            prod_subquery = (
+                db.query(VideoProduction.video_id)
+                .filter(VideoProduction.production_id == production_id)
+                .subquery()
+            )
+            query = query.filter(Video.id.in_(prod_subquery))
 
         # Apply date filters
         if date_from:

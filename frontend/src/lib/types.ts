@@ -3,6 +3,7 @@ export interface FilterState {
   search: string;
   category: string;
   tags: string[];
+  production: number | null;
   dateFrom: Date | null;
   dateTo: Date | null;
   sort: SortOption;
@@ -29,6 +30,15 @@ export interface TagWithCount {
   count: number;
 }
 
+export interface Production {
+  id: number;
+  title: string;
+  platform?: string | null;
+  link?: string | null;
+  is_published: boolean;
+  video_count?: number;
+}
+
 export interface VideoMetadata {
   category?: string | null;
   location?: string | null;
@@ -38,17 +48,6 @@ export interface VideoMetadata {
 export interface VideoTag {
   id: number;
   name: string;
-}
-
-export interface VideoUsage {
-  id: number;
-  title: string;
-  link: string;
-}
-
-export interface UsageEntry {
-  title: string;
-  link: string;
 }
 
 export interface Video {
@@ -65,7 +64,7 @@ export interface Video {
   thumbnail_count: number;
   metadata?: VideoMetadata | null;
   tags: VideoTag[];
-  usages: VideoUsage[];
+  productions: Production[];
 }
 
 /** Payload for updating a single video's metadata. */
@@ -74,5 +73,5 @@ export interface VideoUpdate {
   location?: string | null;
   notes?: string | null;
   tags?: string[];
-  usages?: UsageEntry[];
+  production_ids?: number[];
 }
