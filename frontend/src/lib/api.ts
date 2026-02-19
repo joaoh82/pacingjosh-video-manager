@@ -116,6 +116,10 @@ export async function updateVideo(id: number, data: VideoUpdate): Promise<Video>
   });
 }
 
+export async function openVideoFolder(id: number): Promise<void> {
+  await fetchApi(`/api/videos/${id}/open-folder`, { method: 'POST' });
+}
+
 // --- Bulk update ---
 
 export interface BulkUpdateRequest {

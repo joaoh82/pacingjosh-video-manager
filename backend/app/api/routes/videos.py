@@ -1,3 +1,6 @@
+import os
+import sys
+import subprocess
 from typing import Optional, List
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -173,3 +176,40 @@ async def get_recent_videos(
 async def get_statistics(db: Session = Depends(get_database)):
     """Get database statistics."""
     return search_service.get_statistics(db)
+
+
+@router.post("/{video_id}/open-folder")
+async def open_video_folder(
+    video_id: int,
+    db: Session = Depends(get_database)
+):
+    """Open the file explorer at the video's location."""
+    video = video_service.get_video(db, video_id)
+    if not video:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Video not found: {video_id}"
+        )
+
+    file_path = video.file_path
+    if not os.path.exists(file_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File no longer exists on disk"
+        )
+
+    try:
+        if sys.platform == "win32":
+            subprocess.Popen(["explorer", "/select,", file_path])
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", "-R", file_path])
+        else:
+            folder = os.path.dirname(file_path)
+            subprocess.Popen(["xdg-open", folder])
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to open folder: {str(e)}"
+        )
+
+    return {"message": "Folder opened"}

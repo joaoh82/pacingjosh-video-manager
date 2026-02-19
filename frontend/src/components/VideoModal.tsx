@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { Video, VideoUpdate, Production } from '@/lib/types';
-import { getStreamUrl, updateVideo, getProductions } from '@/lib/api';
+import { getStreamUrl, updateVideo, getProductions, openVideoFolder } from '@/lib/api';
 import { format } from 'date-fns';
 
 interface VideoModalProps {
@@ -221,7 +221,19 @@ export default function VideoModal({
                   </div>
                 </div>
                 <div className="mt-3 pt-3 border-t dark:border-gray-700">
-                  <span className="text-gray-600 dark:text-gray-400 text-sm">Path:</span>
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-600 dark:text-gray-400 text-sm">Path:</span>
+                    <button
+                      onClick={() => openVideoFolder(video.id).catch(() => alert('Could not open folder'))}
+                      className="inline-flex items-center gap-1 text-xs text-primary-600 dark:text-primary-400 hover:underline"
+                      title="Show in folder"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 19a2 2 0 01-2-2V7a2 2 0 012-2h4l2 2h4a2 2 0 012 2v1M5 19h14a2 2 0 002-2v-5a2 2 0 00-2-2H9a2 2 0 00-2 2v5a2 2 0 01-2 2z" />
+                      </svg>
+                      Open folder
+                    </button>
+                  </div>
                   <p className="text-xs text-gray-900 dark:text-white break-all mt-1">{video.file_path}</p>
                 </div>
               </div>

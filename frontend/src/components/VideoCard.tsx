@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { Video } from '@/lib/types';
-import { getThumbnailUrl } from '@/lib/api';
+import { getThumbnailUrl, openVideoFolder } from '@/lib/api';
 import { format } from 'date-fns';
 
 interface VideoCardProps {
@@ -138,9 +138,23 @@ export default function VideoCard({
 
       {/* Info section */}
       <div className="p-4">
-        <h3 className="font-semibold text-gray-900 dark:text-white truncate mb-2">
-          {video.filename}
-        </h3>
+        <div className="flex items-center gap-1 mb-2">
+          <h3 className="font-semibold text-gray-900 dark:text-white truncate flex-1">
+            {video.filename}
+          </h3>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              openVideoFolder(video.id).catch(() => {});
+            }}
+            className="flex-shrink-0 p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 opacity-0 group-hover:opacity-100 transition-opacity"
+            title="Show in folder"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 19a2 2 0 01-2-2V7a2 2 0 012-2h4l2 2h4a2 2 0 012 2v1M5 19h14a2 2 0 002-2v-5a2 2 0 00-2-2H9a2 2 0 00-2 2v5a2 2 0 01-2 2z" />
+            </svg>
+          </button>
+        </div>
 
         <div className="flex items-center justify-between text-sm text-gray-600 dark:text-gray-400 mb-2">
           <span>{formatFileSize(video.file_size)}</span>
