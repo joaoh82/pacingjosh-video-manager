@@ -6,8 +6,8 @@ A modern, full-stack video indexing and management application for organizing an
 
 Created to help manage my own videos for my Youtube Channel [Pacing Josh](https://www.youtube.com/@pacingjosh)
 
-![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.109.0-green.svg)
+![Rust](https://img.shields.io/badge/Rust-1.75+-orange.svg)
+![Actix-web](https://img.shields.io/badge/Actix--web-4.9-red.svg)
 ![Next.js](https://img.shields.io/badge/Next.js-14.2.0-black.svg)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.3.3-blue.svg)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
@@ -48,9 +48,9 @@ Created to help manage my own videos for my Youtube Channel [Pacing Josh](https:
 ## Architecture
 
 **Backend:**
-- FastAPI (Python) - REST API
+- Actix-web (Rust) - REST API
 - SQLite - Database
-- SQLAlchemy - ORM
+- Diesel - ORM
 - FFmpeg - Video processing
 
 **Frontend:**
@@ -59,13 +59,15 @@ Created to help manage my own videos for my Youtube Channel [Pacing Josh](https:
 - TypeScript
 - Tailwind CSS
 
+> **Note:** The original Python/FastAPI backend (`backend/`) is **deprecated and no longer maintained**. All active development is on the Rust backend (`backend-rust/`).
+
 ## Prerequisites
 
 ### Required Software
 
 | Software | Minimum Version | Installation |
 |----------|----------------|--------------|
-| Python | 3.11+ | [python.org](https://www.python.org/downloads/) |
+| Rust | 1.75+ | [rustup.rs](https://rustup.rs/) |
 | Node.js | 18.0+ | [nodejs.org](https://nodejs.org/) |
 | FFmpeg | Latest | See OS-specific instructions below |
 
@@ -113,66 +115,49 @@ ffmpeg -version
 - **OS**: macOS 10.15+, Ubuntu 20.04+, Windows 10+
 - **RAM**: 2GB minimum (4GB+ recommended)
 - **Disk Space**:
-  - Application: ~50MB
+  - Application: ~10MB (Rust binary)
   - Database: ~1-2MB per 1000 videos
   - Thumbnails: ~50-100KB per video
 
 ## Quick Start
 
-### macOS / Linux
+### 1. Clone the repository
 
 ```bash
-# 1. Clone the repository
 git clone https://github.com/joaoh82/pacingjosh-video-manager.git
 cd pacingjosh-video-manager
-
-# 2. Backend setup
-cd backend
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-
-# 3. Frontend setup (in new terminal)
-cd frontend
-npm install
-cp .env.example .env.local
-
-# 4. Run backend (Terminal 1)
-cd backend && source venv/bin/activate && python run.py
-
-# 5. Run frontend (Terminal 2)
-cd frontend && npm run dev
 ```
 
-### Windows
+### 2. Backend setup
 
-```powershell
-# 1. Clone the repository
-git clone https://github.com/joaoh82/pacingjosh-video-manager.git
-cd pacingjosh-video-manager
+```bash
+cd backend-rust
 
-# 2. Backend setup
-cd backend
-python -m venv venv
-.\venv\Scripts\activate
-pip install -r requirements.txt
+# Install Diesel CLI (first time only)
+cargo install diesel_cli --no-default-features --features sqlite
 
-# 3. Frontend setup (in new PowerShell window)
+# Configure environment
+cp .env.example .env
+# Edit .env to set VIDEO_DIRECTORY and other settings
+
+# Run database migrations
+diesel migration run
+
+# Start the server
+cargo run
+```
+
+The API will be available at `http://localhost:8000`.
+
+### 3. Frontend setup
+
+```bash
 cd frontend
 npm install
-copy .env.example .env.local
-
-# 4. Run backend (PowerShell 1)
-cd backend
-.\venv\Scripts\activate
-python run.py
-
-# 5. Run frontend (PowerShell 2)
-cd frontend
 npm run dev
 ```
 
-### First-Time Setup
+### 4. First-Time Setup
 
 1. Open **http://localhost:3000** in your browser
 2. You'll be redirected to the setup page
@@ -265,24 +250,16 @@ npm run dev
 
 ### Backend Configuration
 
-Edit `backend/app/config.py` or use environment variables:
+Edit `backend-rust/.env`:
 
-```python
-# Database
-DATABASE_URL=sqlite:///./data/database.db
-
-# Video Settings
+```bash
+HOST=127.0.0.1
+PORT=8000
+DATABASE_PATH=./data/database.db
 VIDEO_DIRECTORY=/path/to/videos
-SUPPORTED_FORMATS=[".mp4", ".mov", ".avi", ".mkv", ".webm", ".flv", ".wmv"]
-
-# Thumbnail Settings
 THUMBNAIL_DIRECTORY=./data/thumbnails
 THUMBNAIL_COUNT=5
 THUMBNAIL_WIDTH=320
-
-# Server
-HOST=127.0.0.1
-PORT=8000
 ```
 
 ### Frontend Configuration
@@ -295,27 +272,26 @@ NEXT_PUBLIC_API_URL=http://localhost:8000/api
 
 ## API Documentation
 
-Once the backend is running, visit:
-- **Interactive Docs**: http://localhost:8000/docs
-- **Alternative Docs**: http://localhost:8000/redoc
-
 ### Key Endpoints
 
 ```
 POST   /api/scan                    - Start directory scan
 GET    /api/scan/status/{id}        - Get scan progress
+POST   /api/scan/rescan             - Rescan existing library
 GET    /api/videos                  - List/search videos
 GET    /api/videos/{id}             - Get video details
 PUT    /api/videos/{id}             - Update video metadata
+DELETE /api/videos/{id}             - Delete video record
 POST   /api/videos/bulk-update      - Bulk update videos
 GET    /api/tags                    - List all tags
-GET    /api/tags/categories         - List all categories
 GET    /api/productions             - List all productions
 POST   /api/productions             - Create production
 PUT    /api/productions/{id}        - Update production
 DELETE /api/productions/{id}        - Delete production
 GET    /api/stream/{id}             - Stream video
 GET    /api/thumbnails/{id}/{index} - Get thumbnail
+GET    /api/config                  - Get configuration
+PUT    /api/config                  - Update configuration
 ```
 
 ## Database Schema
@@ -323,7 +299,7 @@ GET    /api/thumbnails/{id}/{index} - Get thumbnail
 ### Tables
 
 **videos**
-- id, file_path, filename
+- id, file_path, filename, file_hash
 - duration, file_size, resolution, fps, codec
 - created_date, indexed_date, thumbnail_count
 
@@ -347,40 +323,26 @@ GET    /api/thumbnails/{id}/{index} - Get thumbnail
 ### Project Structure
 
 ```
-video_manager/
-├── backend/
-│   ├── app/
-│   │   ├── api/routes/     # API endpoints
-│   │   ├── models/         # SQLAlchemy models
-│   │   ├── schemas/        # Pydantic schemas
-│   │   ├── services/       # Business logic
-│   │   ├── config.py       # Configuration
-│   │   ├── database.py     # Database setup
-│   │   └── main.py         # FastAPI app
-│   └── data/
-│       ├── database.db     # SQLite database
-│       └── thumbnails/     # Generated thumbnails
-├── frontend/
+pacingjosh-video-manager/
+├── backend-rust/               # Active Rust backend (Actix-web + Diesel)
+│   ├── src/
+│   │   ├── models/             # Diesel ORM models
+│   │   ├── routes/             # API route handlers
+│   │   ├── services/           # Business logic
+│   │   ├── config.rs
+│   │   ├── db.rs
+│   │   ├── schema.rs
+│   │   └── main.rs
+│   ├── migrations/             # Diesel migrations
+│   └── data/                   # Runtime data (gitignored)
+├── frontend/                   # Next.js 14 frontend
 │   └── src/
-│       ├── app/            # Next.js pages
-│       ├── components/     # React components
-│       ├── lib/            # API client & types
-│       └── styles/         # Global styles
-└── images/                 # Screenshots & branding
-```
-
-### Running Tests
-
-**Backend:**
-```bash
-cd backend
-pytest tests/
-```
-
-**Frontend:**
-```bash
-cd frontend
-npm test
+│       ├── app/                # Next.js pages
+│       ├── components/         # React components
+│       ├── lib/                # API client & types
+│       └── styles/             # Global styles
+├── backend/                    # [DEPRECATED] Python/FastAPI backend
+└── images/                     # Screenshots & branding
 ```
 
 ## Troubleshooting
@@ -403,7 +365,7 @@ lsof -ti:8000 | xargs kill  # Backend
 lsof -ti:3000 | xargs kill  # Frontend
 
 # Or use different ports
-# Backend: python run.py (edit port in config.py)
+# Backend: set PORT=8001 in .env
 # Frontend: npm run dev -- -p 3001
 ```
 
@@ -460,7 +422,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Acknowledgments
 
-- Built with [FastAPI](https://fastapi.tiangolo.com/)
+- Built with [Actix-web](https://actix.rs/)
+- Database ORM by [Diesel](https://diesel.rs/)
 - Powered by [FFmpeg](https://ffmpeg.org/)
 - UI framework by [Next.js](https://nextjs.org/)
 - Styled with [Tailwind CSS](https://tailwindcss.com/)

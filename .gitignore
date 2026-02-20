@@ -55,11 +55,13 @@ out/
 next-env.d.ts
 
 # Database & Data
-data/database.db
-data/database.db-shm
-data/database.db-wal
+*.db
+*.db-shm
+*.db-wal
 data/config.json
 data/thumbnails/
+data/thumbnail/
+backend-rust/data/thumbnails/
 
 # Environment variables
 .env
@@ -80,6 +82,9 @@ htmlcov/
 # Alembic
 alembic/versions/*.py
 !alembic/versions/__init__.py
+
+# Rust
+backend-rust/target/
 
 # Temp files
 *.tmp
