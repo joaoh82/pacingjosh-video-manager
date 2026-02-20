@@ -1,0 +1,6 @@
+DROP TABLE IF EXISTS video_productions;
+DROP TABLE IF EXISTS productions;
+DROP TABLE IF EXISTS video_tags;
+DROP TABLE IF EXISTS tags;
+DROP TABLE IF EXISTS metadata;
+DROP TABLE IF EXISTS videos;
