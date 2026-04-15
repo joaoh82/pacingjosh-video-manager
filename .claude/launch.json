@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "backend-rust",
+      "runtimeExecutable": "cargo",
+      "runtimeArgs": ["run", "--manifest-path", "backend-rust/Cargo.toml"],
+      "port": 8000
+    },
+    {
+      "name": "frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "frontend"],
+      "port": 3000
+    },
+    {
+      "name": "tauri-dev",
+      "runtimeExecutable": "cargo",
+      "runtimeArgs": ["tauri", "dev"],
+      "port": 1420
+    }
+  ]
+}

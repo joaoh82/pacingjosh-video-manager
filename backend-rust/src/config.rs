@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 use log::{info, warn};
 
@@ -45,9 +45,20 @@ impl Default for Settings {
 }
 
 impl Settings {
-    /// Load settings from environment variables, falling back to defaults
-    pub fn from_env() -> Self {
+    /// Load settings with the given app_data_dir as the base for default paths,
+    /// then apply env-var overrides on top.
+    pub fn from_env_with_base(app_data_dir: &Path) -> Self {
         let mut settings = Self::default();
+
+        // Rebase default paths onto app_data_dir
+        settings.database_path = app_data_dir
+            .join("database.db")
+            .to_string_lossy()
+            .into_owned();
+        settings.thumbnail_directory = app_data_dir
+            .join("thumbnails")
+            .to_string_lossy()
+            .into_owned();
 
         if let Ok(val) = std::env::var("HOST") { settings.host = val; }
         if let Ok(val) = std::env::var("PORT") {
@@ -63,6 +74,12 @@ impl Settings {
             if let Ok(n) = val.parse() { settings.thumbnail_width = n; }
         }
         settings
+    }
+
+    /// Legacy helper — defaults to CWD-based `./data` directory.
+    #[allow(dead_code)]
+    pub fn from_env() -> Self {
+        Self::from_env_with_base(Path::new("./data"))
     }
 }
 
@@ -90,9 +107,15 @@ struct ConfigFile {
 }
 
 impl ConfigManager {
-    pub fn new(config_path: &str) -> Self {
-        let mut settings = Settings::from_env();
-        let path = PathBuf::from(config_path);
+    /// Create a ConfigManager with the given app_data_dir as the base for all
+    /// default paths (database, thumbnails, config file). Env vars and the
+    /// on-disk config.json still override these defaults.
+    pub fn new(app_data_dir: &Path) -> Self {
+        // Ensure app data dir exists
+        std::fs::create_dir_all(app_data_dir).ok();
+
+        let path = app_data_dir.join("config.json");
+        let mut settings = Settings::from_env_with_base(app_data_dir);
 
         // Load from config file if exists
         if path.exists() {
@@ -106,7 +129,7 @@ impl ConfigManager {
                             if let Some(v) = cfg.thumbnail_count { settings.thumbnail_count = v; }
                             if let Some(v) = cfg.thumbnail_width { settings.thumbnail_width = v; }
                             if let Some(v) = cfg.supported_formats { settings.supported_formats = v; }
-                            info!("Loaded config from {}", config_path);
+                            info!("Loaded config from {}", path.display());
                         }
                         Err(e) => warn!("Failed to parse config file: {}", e),
                     }
@@ -119,6 +142,17 @@ impl ConfigManager {
             config_path: path,
             settings: RwLock::new(settings),
         }
+    }
+
+    /// Legacy constructor accepting a string path to the config file.
+    #[allow(dead_code)]
+    pub fn from_config_path(config_path: &str) -> Self {
+        let path = PathBuf::from(config_path);
+        let app_data_dir = path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("./data"));
+        Self::new(&app_data_dir)
     }
 
     pub fn save_config(

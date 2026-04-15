@@ -1,130 +1,55 @@
-mod config;
-mod db;
-mod models;
-mod routes;
-mod schema;
-mod services;
-mod utils;
+//! Standalone binary entry point for the video-manager backend.
+//!
+//! The actual server logic lives in `lib.rs` (so the Tauri shell can embed it
+//! without spawning a subprocess). This binary is kept for the standalone
+//! `cargo run` development workflow.
 
-use actix_cors::Cors;
-use actix_web::{get, web, App, HttpResponse, HttpServer};
-use log::info;
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::net::SocketAddr;
+use std::path::PathBuf;
 
-use crate::config::ConfigManager;
-use crate::services::scanner::ScanMap;
+use video_manager_backend::{run, BackendPaths};
 
-#[get("/")]
-async fn root(config: web::Data<ConfigManager>) -> HttpResponse {
-    let settings = config.get_settings();
-    HttpResponse::Ok().json(serde_json::json!({
-        "name": settings.app_name,
-        "version": settings.app_version,
-        "status": "running",
-        "docs": "/docs",
-        "message": "Welcome to Video Manager API",
-    }))
-}
-
-#[get("/health")]
-async fn health() -> HttpResponse {
-    HttpResponse::Ok().json(serde_json::json!({
-        "status": "healthy",
-        "database": "connected",
-    }))
+fn load_dotenv() {
+    // Load .env file if present (search CWD-relative locations)
+    let candidates = ["backend-rust/.env", ".env"];
+    for candidate in &candidates {
+        if let Ok(contents) = std::fs::read_to_string(candidate) {
+            for line in contents.lines() {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
+                }
+                if let Some((key, value)) = line.split_once('=') {
+                    std::env::set_var(key.trim(), value.trim());
+                }
+            }
+            break;
+        }
+    }
 }
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    // Load .env file if present
-    if let Ok(contents) = std::fs::read_to_string("backend-rust/.env") {
-        for line in contents.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') { continue; }
-            if let Some((key, value)) = line.split_once('=') {
-                std::env::set_var(key.trim(), value.trim());
-            }
-        }
-    } else if let Ok(contents) = std::fs::read_to_string(".env") {
-        for line in contents.lines() {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') { continue; }
-            if let Some((key, value)) = line.split_once('=') {
-                std::env::set_var(key.trim(), value.trim());
-            }
-        }
-    }
-
+    load_dotenv();
     env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
 
-    // Initialize config
-    let config_manager = ConfigManager::new("./data/config.json");
-    let settings = config_manager.get_settings();
+    // Standalone mode uses CWD-relative ./data for app data.
+    let app_data_dir = PathBuf::from("./data");
 
-    let host = settings.host.clone();
-    let port = settings.port;
+    // Resolve bind address from env vars (HOST/PORT) with sensible defaults.
+    let host = std::env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let port: u16 = std::env::var("PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8000);
+    let bind_addr: SocketAddr = format!("{}:{}", host, port)
+        .parse()
+        .expect("Invalid HOST/PORT");
 
-    // Initialize database
-    let pool = db::create_pool(&settings.database_path);
-    db::init_db(&pool);
-
-    // Ensure data directories exist (matches Python init_db behavior)
-    config_manager.get_thumbnail_directory();
-
-    // Scan progress map
-    let scan_map: ScanMap = Arc::new(Mutex::new(HashMap::new()));
-
-    let cors_origins = settings.cors_origins.clone();
-
-    println!("============================================================");
-    println!("  Video Manager API (Rust)");
-    println!("============================================================");
-    println!("  Server: http://{}:{}", host, port);
-    println!("  Database: {}", settings.database_path);
-    println!("  Video Directory: {}", settings.video_directory.as_deref().unwrap_or("Not configured"));
-    println!("============================================================");
-    println!();
-    info!("Starting server on {}:{}", host, port);
-
-    let config_data = web::Data::new(config_manager);
-    let pool_data = web::Data::new(pool);
-    let scan_data = web::Data::new(scan_map);
-
-    HttpServer::new(move || {
-        let cors = Cors::default()
-            .allowed_methods(vec!["GET", "POST", "PUT", "DELETE", "OPTIONS"])
-            .allowed_headers(vec![
-                actix_web::http::header::AUTHORIZATION,
-                actix_web::http::header::ACCEPT,
-                actix_web::http::header::CONTENT_TYPE,
-            ])
-            .supports_credentials()
-            .max_age(3600);
-
-        // Add allowed origins
-        let cors = cors_origins.iter().fold(cors, |c, origin| {
-            c.allowed_origin(origin)
-        });
-
-        App::new()
-            .wrap(cors)
-            .app_data(config_data.clone())
-            .app_data(pool_data.clone())
-            .app_data(scan_data.clone())
-            .service(root)
-            .service(health)
-            .service(
-                web::scope("/api")
-                    .configure(routes::config_routes::configure)
-                    .configure(routes::scan::configure)
-                    .configure(routes::videos::configure)
-                    .configure(routes::tags::configure)
-                    .configure(routes::stream::configure)
-                    .configure(routes::productions::configure)
-            )
+    run(BackendPaths {
+        app_data_dir,
+        bind_addr,
+        ffmpeg: None, // use system PATH
     })
-    .bind(format!("{}:{}", host, port))?
-    .run()
     .await
 }

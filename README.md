@@ -47,14 +47,17 @@ Created to help manage my own videos for my Youtube Channel [Pacing Josh](https:
 
 ## Architecture
 
+**Desktop shell:**
+- [Tauri 2.0](https://v2.tauri.app/) (`src-tauri/`) — ships the app as a single native installer per OS. Embeds the Rust backend on a dedicated thread and loads the static-exported frontend inside a WebView.
+
 **Backend:**
-- Actix-web (Rust) - REST API
-- SQLite - Database
-- Diesel - ORM
-- FFmpeg - Video processing
+- Actix-web (Rust) — REST API, compiled as both a standalone binary and a library (embedded into Tauri)
+- SQLite — Database
+- Diesel — ORM
+- FFmpeg — Video processing (bundled as a Tauri sidecar in release builds)
 
 **Frontend:**
-- Next.js 14 (App Router)
+- Next.js 14 (App Router, fully client-side, static-exported)
 - React 18
 - TypeScript
 - Tailwind CSS
@@ -119,7 +122,41 @@ ffmpeg -version
   - Database: ~1-2MB per 1000 videos
   - Thumbnails: ~50-100KB per video
 
-## Quick Start
+## Quick Start (Desktop App — Recommended)
+
+The app is built and distributed as a Tauri 2.0 desktop bundle. Users who just
+want to run the app can grab the latest installer from the
+[releases page](https://github.com/joaoh82/pacingjosh-video-manager/releases)
+and skip everything below.
+
+For development builds:
+
+```bash
+git clone https://github.com/joaoh82/pacingjosh-video-manager.git
+cd pacingjosh-video-manager
+
+# First-time setup
+cargo install tauri-cli --version "^2.0"
+bash scripts/fetch-ffmpeg.sh        # or scripts\fetch-ffmpeg.ps1 on Windows
+cargo tauri icon images/Logo.png    # generate app icons
+
+# Run in dev mode (launches Next.js + Tauri window)
+cargo tauri dev                     # run from repo root; finds src-tauri/ automatically
+
+# Build a platform installer (msi/dmg/deb/appimage)
+cargo tauri build
+```
+
+The Tauri shell embeds the Rust backend (via `video_manager_backend::run_blocking`)
+on a dedicated OS thread, picks a free localhost port at startup, and serves
+the static-exported Next.js frontend from an embedded WebView. Per-user app
+data lives at `%APPDATA%\com.pacingjosh.video-manager\` (Windows),
+`~/Library/Application Support/com.pacingjosh.video-manager/` (macOS), or
+`~/.local/share/com.pacingjosh.video-manager/` (Linux).
+
+## Quick Start (Web Dev Workflow)
+
+Prefer this when iterating on frontend or backend code independently.
 
 ### 1. Clone the repository
 
@@ -324,23 +361,35 @@ PUT    /api/config                  - Update configuration
 
 ```
 pacingjosh-video-manager/
+├── src-tauri/                  # Tauri 2.0 desktop shell
+│   ├── src/main.rs             # Boots backend + WebView
+│   ├── binaries/               # FFmpeg sidecars (gitignored, fetch via script)
+│   ├── icons/                  # Generated app icons
+│   ├── capabilities/           # Tauri permission manifest
+│   └── tauri.conf.json
 ├── backend-rust/               # Active Rust backend (Actix-web + Diesel)
 │   ├── src/
+│   │   ├── lib.rs              # Library entry — run() / run_blocking()
+│   │   ├── main.rs             # Standalone binary wrapper
 │   │   ├── models/             # Diesel ORM models
 │   │   ├── routes/             # API route handlers
 │   │   ├── services/           # Business logic
 │   │   ├── config.rs
 │   │   ├── db.rs
-│   │   ├── schema.rs
-│   │   └── main.rs
+│   │   └── schema.rs
 │   ├── migrations/             # Diesel migrations
-│   └── data/                   # Runtime data (gitignored)
-├── frontend/                   # Next.js 14 frontend
+│   └── data/                   # Runtime data (gitignored, standalone dev only)
+├── frontend/                   # Next.js 14 frontend (static-exported)
+│   ├── next.config.js          # output: 'export'
+│   ├── out/                    # Static build output (gitignored)
 │   └── src/
 │       ├── app/                # Next.js pages
 │       ├── components/         # React components
 │       ├── lib/                # API client & types
 │       └── styles/             # Global styles
+├── scripts/
+│   ├── fetch-ffmpeg.sh         # Download FFmpeg sidecars (macOS/Linux)
+│   └── fetch-ffmpeg.ps1        # Download FFmpeg sidecars (Windows)
 ├── backend/                    # [DEPRECATED] Python/FastAPI backend
 └── images/                     # Screenshots & branding
 ```
