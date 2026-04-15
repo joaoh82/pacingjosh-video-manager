@@ -127,7 +127,6 @@ version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92589714878ca59a7626ea19734f0e07a6a875197eec751bb5d3f99e64998c63"
 dependencies = [
- "actix-macros",
  "futures-core",
  "tokio",
 ]
@@ -1861,7 +1860,6 @@ version = "1.0.0"
 dependencies = [
  "actix-cors",
  "actix-files",
- "actix-rt",
  "actix-web",
  "chrono",
  "diesel",

@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { startScan, browseFolder } from '@/lib/api';
+import { startScan, browseFolder, isTauri } from '@/lib/api';
 import Scanner from '@/components/Scanner';
 
 export default function SetupPage() {
@@ -14,23 +14,32 @@ export default function SetupPage() {
   const [isBrowsing, setIsBrowsing] = useState(false);
 
   const handleBrowseFolder = async () => {
-    console.log('Browse button clicked');
     setIsBrowsing(true);
     setError(null);
 
     try {
-      console.log('Calling browseFolder API...');
-      const response = await browseFolder();
-      console.log('Browse response:', response);
-
-      if (response.success && response.path) {
-        console.log('Setting directory to:', response.path);
-        setDirectory(response.path);
-        setError(null);
+      // Inside Tauri, use the native OS folder picker via IPC.
+      // Outside Tauri (regular browser / next dev), fall back to the backend
+      // HTTP endpoint which shells out to the OS dialog.
+      if (isTauri()) {
+        // Use Tauri's injected global directly so we don't have to add
+        // `@tauri-apps/api` to the frontend's npm dependencies (the static
+        // export is shared between dev and Tauri builds).
+        const tauri = (window as any).__TAURI__;
+        const invoke = tauri?.core?.invoke ?? tauri?.invoke;
+        if (typeof invoke !== 'function') {
+          throw new Error('Tauri invoke API not available');
+        }
+        const picked = await invoke('pick_directory');
+        if (typeof picked === 'string' && picked.length > 0) {
+          setDirectory(picked);
+        }
       } else {
-        console.log('No folder selected or error:', response.message);
-        if (response.message !== 'No folder selected') {
-          setError(response.message || 'Failed to open folder picker');
+        const response = await browseFolder();
+        if (response.success && response.path) {
+          setDirectory(response.path);
+        } else if (response.message && response.message !== 'No folder selected') {
+          setError(response.message);
         }
       }
     } catch (err: any) {
@@ -80,7 +89,7 @@ export default function SetupPage() {
             className="h-16 mx-auto mb-2"
           />
           <p className="text-lg text-gray-600 dark:text-gray-400">
-            Let's get started by indexing your videos
+            Let&apos;s get started by indexing your videos
           </p>
         </div>
 
@@ -122,7 +131,7 @@ export default function SetupPage() {
                   </button>
                 </div>
                 <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
-                  💡 <strong>Tip:</strong> Click "Browse..." to select a folder using your system's file picker, or type the path manually.
+                  💡 <strong>Tip:</strong> Click &ldquo;Browse...&rdquo; to select a folder using your system&apos;s file picker, or type the path manually.
                   <br />
                   • macOS: <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">/Users/username/Movies</code>
                   <br />

@@ -220,7 +220,7 @@ export default function SettingsPage() {
             💡 After Changing Settings
           </h3>
           <ul className="text-sm text-blue-800 dark:text-blue-200 space-y-1 list-disc list-inside">
-            <li>If you change the video directory, click "Rescan" on the main page to index videos from the new location</li>
+            <li>If you change the video directory, click &ldquo;Rescan&rdquo; on the main page to index videos from the new location</li>
             <li>Thumbnail settings only apply to newly scanned videos</li>
             <li>To regenerate thumbnails for existing videos, delete them and rescan</li>
           </ul>

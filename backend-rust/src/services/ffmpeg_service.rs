@@ -1,7 +1,8 @@
 use chrono::NaiveDateTime;
 use log::{error, warn};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone)]
 pub struct VideoMetadata {
@@ -13,25 +14,62 @@ pub struct VideoMetadata {
     pub created_date: Option<NaiveDateTime>,
 }
 
-#[allow(dead_code)]
-/// Check that ffmpeg and ffprobe are available on PATH
-pub fn check_ffmpeg() -> Result<(), String> {
-    Command::new("ffprobe")
-        .arg("-version")
-        .output()
-        .map_err(|_| "ffprobe not found in PATH".to_string())?;
+/// Explicit binary paths for ffmpeg and ffprobe. When the backend is embedded
+/// in Tauri, these point at sidecar binaries; when running standalone they
+/// default to the plain binary names (resolved via PATH).
+#[derive(Debug, Clone)]
+pub struct FfmpegPaths {
+    pub ffmpeg: PathBuf,
+    pub ffprobe: PathBuf,
+}
 
-    Command::new("ffmpeg")
+impl Default for FfmpegPaths {
+    fn default() -> Self {
+        Self {
+            ffmpeg: PathBuf::from("ffmpeg"),
+            ffprobe: PathBuf::from("ffprobe"),
+        }
+    }
+}
+
+static FFMPEG_PATHS: OnceLock<FfmpegPaths> = OnceLock::new();
+
+/// Set the ffmpeg/ffprobe binary paths for this process. Must be called before
+/// any scan or thumbnail generation begins. Idempotent — calling twice is a
+/// no-op on the second call (OnceLock semantics).
+pub fn set_ffmpeg_paths(paths: FfmpegPaths) {
+    let _ = FFMPEG_PATHS.set(paths);
+}
+
+fn ffprobe_cmd() -> Command {
+    let paths = FFMPEG_PATHS.get().cloned().unwrap_or_default();
+    Command::new(paths.ffprobe)
+}
+
+fn ffmpeg_cmd() -> Command {
+    let paths = FFMPEG_PATHS.get().cloned().unwrap_or_default();
+    Command::new(paths.ffmpeg)
+}
+
+#[allow(dead_code)]
+/// Check that ffmpeg and ffprobe are available (at the configured paths, or PATH).
+pub fn check_ffmpeg() -> Result<(), String> {
+    ffprobe_cmd()
         .arg("-version")
         .output()
-        .map_err(|_| "ffmpeg not found in PATH".to_string())?;
+        .map_err(|_| "ffprobe not found".to_string())?;
+
+    ffmpeg_cmd()
+        .arg("-version")
+        .output()
+        .map_err(|_| "ffmpeg not found".to_string())?;
 
     Ok(())
 }
 
 /// Extract metadata from a video file using ffprobe
 pub fn extract_metadata(video_path: &Path) -> Option<VideoMetadata> {
-    let output = Command::new("ffprobe")
+    let output = ffprobe_cmd()
         .args([
             "-v", "quiet",
             "-print_format", "json",
@@ -169,7 +207,7 @@ pub fn generate_thumbnails(
         let timestamp = interval * (i as f32 + 1.0);
         let output_path = out_dir.join(format!("thumb_{}.jpg", i));
 
-        let result = Command::new("ffmpeg")
+        let result = ffmpeg_cmd()
             .args([
                 "-ss", &format!("{}", timestamp),
                 "-i",

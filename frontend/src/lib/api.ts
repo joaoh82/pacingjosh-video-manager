@@ -1,11 +1,34 @@
 import type { FilterState, Video, VideoUpdate, Production } from './types';
 
-// Normalize base to origin only (no trailing /api) so paths like /api/browse-folder never double up
+declare global {
+  interface Window {
+    __VMAN_API__?: string;
+    __TAURI__?: unknown;
+  }
+}
+
+// Resolution order for the backend base URL:
+// 1. `window.__VMAN_API__` — injected by the Tauri shell at startup with the
+//    dynamically-assigned embedded-backend port.
+// 2. `NEXT_PUBLIC_API_URL` env var — for Next dev mode pointing at a manual
+//    `cargo run` backend.
+// 3. `http://localhost:8000` fallback — matches the standalone dev default.
+//
+// The result is normalized to origin-only (no trailing `/api`) so callers can
+// safely prepend `/api/...` without producing `/api/api/...`.
 function getApiBase(): string {
-  const raw = typeof window !== 'undefined'
-    ? (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000')
-    : process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+  const fromWindow =
+    typeof window !== 'undefined' && typeof window.__VMAN_API__ === 'string'
+      ? window.__VMAN_API__
+      : undefined;
+  const raw =
+    fromWindow || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
   return raw.replace(/\/$/, '').replace(/\/api$/, '');
+}
+
+/** True when running inside the Tauri WebView. */
+export function isTauri(): boolean {
+  return typeof window !== 'undefined' && typeof window.__TAURI__ !== 'undefined';
 }
 
 function apiUrl(path: string): string {

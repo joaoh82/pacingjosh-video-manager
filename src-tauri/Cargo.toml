@@ -1,0 +1,26 @@
+[package]
+name = "video-manager-tauri"
+version = "1.0.0"
+edition = "2021"
+description = "Video Manager desktop shell (Tauri 2.0)"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+log = "0.4"
+env_logger = "0.11"
+
+# The Rust backend is pulled in as a path dependency and launched from this
+# binary via `video_manager_backend::run_blocking(...)` on a dedicated thread.
+video-manager-backend = { path = "../backend-rust" }
+
+[features]
+# Default to no custom protocol; toggled per-bundle by tauri.conf.json.
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

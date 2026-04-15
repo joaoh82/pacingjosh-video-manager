@@ -1,0 +1,19 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Tauri generated
+/gen/
+
+# Downloaded sidecar binaries (regenerate via scripts/fetch-ffmpeg.*)
+/binaries/ffmpeg-*
+/binaries/ffprobe-*
+
+# Platform icons are generated with `cargo tauri icon`; keep the raw source
+# in `images/` at the repo root and regenerate on demand. Only the README
+# describing how to regenerate is tracked.
+/icons/*.png
+/icons/*.icns
+/icons/*.ico
+/icons/android/
+/icons/ios/
