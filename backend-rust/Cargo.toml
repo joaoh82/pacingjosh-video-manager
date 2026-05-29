@@ -27,3 +27,5 @@ log = "0.4"
 walkdir = "2"
 mime_guess = "2"
 sha2 = "0.10"
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
+base64 = "0.22"

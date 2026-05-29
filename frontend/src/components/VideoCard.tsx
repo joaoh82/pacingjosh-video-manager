@@ -134,6 +134,18 @@ export default function VideoCard({
             {video.resolution}
           </div>
         )}
+
+        {/* Orientation badge */}
+        {video.orientation === 'portrait' && (
+          <div className="absolute bottom-2 left-2 flex items-center gap-1 bg-amber-500/90 text-white text-xs font-medium px-2 py-1 rounded">
+            <span aria-hidden>📱</span> Portrait
+          </div>
+        )}
+        {video.orientation === 'landscape' && (
+          <div className="absolute bottom-2 left-2 flex items-center gap-1 bg-sky-600/90 text-white text-xs font-medium px-2 py-1 rounded">
+            <span aria-hidden>🖥️</span> Landscape
+          </div>
+        )}
       </div>
 
       {/* Info section */}

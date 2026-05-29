@@ -80,9 +80,29 @@ pub struct VideoFull {
     pub indexed_date: NaiveDateTime,
     pub thumbnail_count: i32,
     pub checksum: Option<String>,
+    /// Derived from `resolution`: "landscape" | "portrait" | "square".
+    pub orientation: Option<String>,
     pub metadata: Option<MetadataResponse>,
     pub tags: Vec<TagResponse>,
     pub productions: Vec<ProductionBriefResponse>,
+}
+
+/// Derive an orientation label from a `"WxH"` resolution string.
+pub fn orientation_from_resolution(resolution: &Option<String>) -> Option<String> {
+    let res = resolution.as_ref()?;
+    let (w, h) = res.split_once('x')?;
+    let w: i64 = w.trim().parse().ok()?;
+    let h: i64 = h.trim().parse().ok()?;
+    if w == 0 || h == 0 {
+        return None;
+    }
+    Some(if w > h {
+        "landscape".to_string()
+    } else if h > w {
+        "portrait".to_string()
+    } else {
+        "square".to_string()
+    })
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

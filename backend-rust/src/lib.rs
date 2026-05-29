@@ -138,7 +138,8 @@ pub async fn run(paths: BackendPaths) -> std::io::Result<()> {
                     .configure(routes::videos::configure)
                     .configure(routes::tags::configure)
                     .configure(routes::stream::configure)
-                    .configure(routes::productions::configure),
+                    .configure(routes::productions::configure)
+                    .configure(routes::ai::configure),
             )
     })
     .bind(paths.bind_addr)?

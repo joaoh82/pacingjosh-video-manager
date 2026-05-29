@@ -44,6 +44,8 @@ pub fn load_video_full(conn: &mut SqliteConnection, video: Video) -> VideoFull {
         .load(conn)
         .unwrap_or_default();
 
+    let orientation = orientation_from_resolution(&video.resolution);
+
     VideoFull {
         id: video.id,
         file_path: video.file_path,
@@ -57,6 +59,7 @@ pub fn load_video_full(conn: &mut SqliteConnection, video: Video) -> VideoFull {
         indexed_date: video.indexed_date,
         thumbnail_count: video.thumbnail_count,
         checksum: video.checksum,
+        orientation,
         metadata: meta.map(|m| MetadataResponse {
             category: m.category,
             location: m.location,

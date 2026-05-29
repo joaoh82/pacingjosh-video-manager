@@ -56,11 +56,28 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    ai_generations (id) {
+        id -> Integer,
+        video_id -> Integer,
+        transcript -> Nullable<Text>,
+        thumbnail_text -> Nullable<Text>,
+        instagram_description -> Nullable<Text>,
+        tiktok_description -> Nullable<Text>,
+        youtube_short_description -> Nullable<Text>,
+        hashtags -> Nullable<Text>,
+        provider -> Nullable<Text>,
+        model -> Nullable<Text>,
+        generated_at -> Timestamp,
+    }
+}
+
 diesel::joinable!(metadata -> videos (video_id));
 diesel::joinable!(video_tags -> videos (video_id));
 diesel::joinable!(video_tags -> tags (tag_id));
 diesel::joinable!(video_productions -> videos (video_id));
 diesel::joinable!(video_productions -> productions (production_id));
+diesel::joinable!(ai_generations -> videos (video_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     videos,
@@ -69,4 +86,5 @@ diesel::allow_tables_to_appear_in_same_query!(
     video_tags,
     productions,
     video_productions,
+    ai_generations,
 );

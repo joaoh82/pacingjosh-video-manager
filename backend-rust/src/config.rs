@@ -3,6 +3,38 @@ use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 use log::{info, warn};
 
+/// LLM provider configuration for AI content generation. Persisted in
+/// config.json (no environment variables). API keys are stored here but are
+/// never returned by the read API — only their presence is exposed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiSettings {
+    /// Provider used for text generation: "gemini" | "openai" | "anthropic".
+    pub text_provider: String,
+    /// Model id for text generation (e.g. "gemini-2.0-flash", "gpt-4o").
+    pub text_model: String,
+    /// Provider used for transcription: "gemini" | "openai".
+    pub transcription_provider: String,
+    /// Model id for transcription (e.g. "whisper-1", "gemini-2.0-flash").
+    pub transcription_model: String,
+    pub gemini_api_key: Option<String>,
+    pub openai_api_key: Option<String>,
+    pub anthropic_api_key: Option<String>,
+}
+
+impl Default for AiSettings {
+    fn default() -> Self {
+        Self {
+            text_provider: "gemini".to_string(),
+            text_model: "gemini-2.0-flash".to_string(),
+            transcription_provider: "gemini".to_string(),
+            transcription_model: "gemini-2.0-flash".to_string(),
+            gemini_api_key: None,
+            openai_api_key: None,
+            anthropic_api_key: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub app_name: String,
@@ -16,6 +48,7 @@ pub struct Settings {
     pub thumbnail_count: i32,
     pub thumbnail_width: i32,
     pub cors_origins: Vec<String>,
+    pub ai: AiSettings,
 }
 
 impl Default for Settings {
@@ -40,6 +73,7 @@ impl Default for Settings {
                 "http://localhost:3002".into(),
                 "http://127.0.0.1:3002".into(),
             ],
+            ai: AiSettings::default(),
         }
     }
 }
@@ -104,6 +138,8 @@ struct ConfigFile {
     thumbnail_width: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     supported_formats: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ai: Option<AiSettings>,
 }
 
 impl ConfigManager {
@@ -129,6 +165,7 @@ impl ConfigManager {
                             if let Some(v) = cfg.thumbnail_count { settings.thumbnail_count = v; }
                             if let Some(v) = cfg.thumbnail_width { settings.thumbnail_width = v; }
                             if let Some(v) = cfg.supported_formats { settings.supported_formats = v; }
+                            if let Some(v) = cfg.ai { settings.ai = v; }
                             info!("Loaded config from {}", path.display());
                         }
                         Err(e) => warn!("Failed to parse config file: {}", e),
@@ -179,6 +216,7 @@ impl ConfigManager {
             thumbnail_count: Some(settings.thumbnail_count),
             thumbnail_width: Some(settings.thumbnail_width),
             supported_formats: Some(settings.supported_formats.clone()),
+            ai: Some(settings.ai.clone()),
         };
 
         let json = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
@@ -186,6 +224,41 @@ impl ConfigManager {
 
         info!("Configuration saved to {:?}", self.config_path);
         Ok(())
+    }
+
+    /// Update AI/LLM settings and persist the full config to disk. Other config
+    /// fields (video directory, thumbnails) are preserved.
+    pub fn save_ai_settings(&self, ai: AiSettings) -> Result<(), String> {
+        {
+            let mut settings = self.settings.write().map_err(|e| e.to_string())?;
+            settings.ai = ai;
+        }
+
+        let settings = self.settings.read().map_err(|e| e.to_string())?;
+
+        if let Some(parent) = self.config_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+
+        let cfg = ConfigFile {
+            video_directory: settings.video_directory.clone(),
+            database_path: Some(settings.database_path.clone()),
+            thumbnail_directory: Some(settings.thumbnail_directory.clone()),
+            thumbnail_count: Some(settings.thumbnail_count),
+            thumbnail_width: Some(settings.thumbnail_width),
+            supported_formats: Some(settings.supported_formats.clone()),
+            ai: Some(settings.ai.clone()),
+        };
+
+        let json = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
+        std::fs::write(&self.config_path, json).map_err(|e| e.to_string())?;
+
+        info!("AI settings saved to {:?}", self.config_path);
+        Ok(())
+    }
+
+    pub fn get_ai_settings(&self) -> AiSettings {
+        self.settings.read().unwrap().ai.clone()
     }
 
     pub fn is_configured(&self) -> bool {

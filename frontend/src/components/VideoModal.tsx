@@ -1,8 +1,16 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Video, VideoUpdate, Production } from '@/lib/types';
-import { getStreamUrl, updateVideo, getProductions, openVideoFolder } from '@/lib/api';
+import { Video, VideoUpdate, Production, AiGeneration } from '@/lib/types';
+import {
+  getStreamUrl,
+  updateVideo,
+  getProductions,
+  openVideoFolder,
+  isTauri,
+  getAiGeneration,
+  generateAiContent,
+} from '@/lib/api';
 import { format } from 'date-fns';
 
 interface VideoModalProps {
@@ -22,6 +30,14 @@ export default function VideoModal({
   const [isSaving, setIsSaving] = useState(false);
   const [currentVideo, setCurrentVideo] = useState<Video>(video);
   const [allProductions, setAllProductions] = useState<Production[]>([]);
+
+  // AI content generation (desktop only, portrait videos only)
+  const aiEligible = isTauri() && video.orientation === 'portrait';
+  const [aiGen, setAiGen] = useState<AiGeneration | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [transcriptOpen, setTranscriptOpen] = useState(false);
   const [formData, setFormData] = useState({
     category: video.metadata?.category || '',
     location: video.metadata?.location || '',
@@ -47,6 +63,16 @@ export default function VideoModal({
       getProductions()
         .then(setAllProductions)
         .catch(() => {});
+
+      // Load any previously-generated AI content for portrait videos.
+      setAiGen(null);
+      setAiError(null);
+      setTranscriptOpen(false);
+      if (isTauri() && video.orientation === 'portrait') {
+        getAiGeneration(video.id)
+          .then((gen) => setAiGen(gen))
+          .catch(() => {});
+      }
     } else {
       document.body.style.overflow = 'unset';
     }
@@ -107,6 +133,29 @@ export default function VideoModal({
       return `${hours}h ${minutes}m ${secs}s`;
     }
     return `${minutes}m ${secs}s`;
+  };
+
+  const handleGenerate = async (regenerate: boolean) => {
+    setAiLoading(true);
+    setAiError(null);
+    try {
+      const gen = await generateAiContent(video.id, regenerate);
+      setAiGen(gen);
+    } catch (err: any) {
+      setAiError(err.message || 'AI generation failed');
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const copyToClipboard = async (key: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey(null), 1500);
+    } catch {
+      // Clipboard may be unavailable; silently ignore.
+    }
   };
 
   const toggleProduction = (prodId: number) => {
@@ -418,6 +467,164 @@ export default function VideoModal({
               )}
             </div>
           </div>
+
+          {/* AI Content panel — desktop only, portrait videos only */}
+          {aiEligible && (
+            <div className="px-6 pb-6">
+              <div className="card">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h3 className="font-semibold text-gray-900 dark:text-white">
+                      AI Content
+                    </h3>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      Thumbnail text & platform descriptions from the video transcript.
+                      {aiGen?.generated_at && (
+                        <> Generated {format(new Date(aiGen.generated_at), 'MMM d, yyyy HH:mm')}.</>
+                      )}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => handleGenerate(!!aiGen)}
+                    disabled={aiLoading}
+                    className="btn btn-primary text-sm whitespace-nowrap"
+                  >
+                    {aiLoading
+                      ? 'Generating…'
+                      : aiGen
+                      ? 'Regenerate'
+                      : 'Generate from transcript'}
+                  </button>
+                </div>
+
+                {aiLoading && (
+                  <div className="flex items-center gap-3 text-sm text-gray-600 dark:text-gray-400">
+                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-primary-600" />
+                    Transcribing audio and generating copy — this can take a little while…
+                  </div>
+                )}
+
+                {aiError && !aiLoading && (
+                  <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+                    <p className="text-sm text-red-600 dark:text-red-400">{aiError}</p>
+                  </div>
+                )}
+
+                {!aiLoading && !aiError && !aiGen && (
+                  <p className="text-sm text-gray-500 dark:text-gray-400 italic">
+                    No AI content yet. Click “Generate from transcript” to create thumbnail
+                    text and Instagram, TikTok, and YouTube Short descriptions.
+                  </p>
+                )}
+
+                {aiGen && !aiLoading && (
+                  <div className="space-y-4">
+                    {/* Thumbnail text suggestions */}
+                    {aiGen.thumbnail_text.length > 0 && (
+                      <div>
+                        <span className="text-sm font-medium text-gray-600 dark:text-gray-400">
+                          Thumbnail text ideas
+                        </span>
+                        <ul className="mt-2 space-y-2">
+                          {aiGen.thumbnail_text.map((t, i) => (
+                            <li
+                              key={i}
+                              className="flex items-center justify-between gap-2 bg-gray-50 dark:bg-gray-700/50 rounded px-3 py-2"
+                            >
+                              <span className="text-sm text-gray-900 dark:text-white">{t}</span>
+                              <button
+                                onClick={() => copyToClipboard(`thumb-${i}`, t)}
+                                className="text-xs text-primary-600 dark:text-primary-400 hover:underline whitespace-nowrap"
+                              >
+                                {copiedKey === `thumb-${i}` ? 'Copied!' : 'Copy'}
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {/* Platform descriptions */}
+                    {[
+                      { key: 'instagram', label: 'Instagram description', value: aiGen.instagram_description },
+                      { key: 'tiktok', label: 'TikTok description', value: aiGen.tiktok_description },
+                      { key: 'youtube', label: 'YouTube Short description', value: aiGen.youtube_short_description },
+                    ].map(({ key, label, value }) =>
+                      value ? (
+                        <div key={key}>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-sm font-medium text-gray-600 dark:text-gray-400">
+                              {label}
+                            </span>
+                            <button
+                              onClick={() => copyToClipboard(key, value)}
+                              className="text-xs text-primary-600 dark:text-primary-400 hover:underline"
+                            >
+                              {copiedKey === key ? 'Copied!' : 'Copy'}
+                            </button>
+                          </div>
+                          <p className="text-sm text-gray-900 dark:text-white whitespace-pre-wrap bg-gray-50 dark:bg-gray-700/50 rounded px-3 py-2">
+                            {value}
+                          </p>
+                        </div>
+                      ) : null
+                    )}
+
+                    {/* Hashtags */}
+                    {aiGen.hashtags.length > 0 && (
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-sm font-medium text-gray-600 dark:text-gray-400">
+                            Hashtags
+                          </span>
+                          <button
+                            onClick={() => copyToClipboard('hashtags', aiGen.hashtags.join(' '))}
+                            className="text-xs text-primary-600 dark:text-primary-400 hover:underline"
+                          >
+                            {copiedKey === 'hashtags' ? 'Copied!' : 'Copy all'}
+                          </button>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {aiGen.hashtags.map((h, i) => (
+                            <span key={i} className="badge badge-primary text-xs">
+                              {h}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Transcript (collapsible) */}
+                    {aiGen.transcript && (
+                      <div>
+                        <button
+                          onClick={() => setTranscriptOpen((o) => !o)}
+                          className="text-sm font-medium text-gray-600 dark:text-gray-400 hover:underline"
+                        >
+                          {transcriptOpen ? '▼' : '▶'} Transcript
+                        </button>
+                        {transcriptOpen && (
+                          <div className="mt-2">
+                            <div className="flex justify-end mb-1">
+                              <button
+                                onClick={() => copyToClipboard('transcript', aiGen.transcript || '')}
+                                className="text-xs text-primary-600 dark:text-primary-400 hover:underline"
+                              >
+                                {copiedKey === 'transcript' ? 'Copied!' : 'Copy'}
+                              </button>
+                            </div>
+                            <p className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap bg-gray-50 dark:bg-gray-700/50 rounded px-3 py-2 max-h-48 overflow-y-auto">
+                              {aiGen.transcript}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
