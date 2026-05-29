@@ -12,6 +12,7 @@ declare global {
   interface Window {
     __VMAN_API__?: string;
     __TAURI__?: unknown;
+    __TAURI_INTERNALS__?: unknown;
   }
 }
 
@@ -34,9 +35,22 @@ function getApiBase(): string {
   return raw.replace(/\/$/, '').replace(/\/api$/, '');
 }
 
-/** True when running inside the Tauri WebView. */
+/**
+ * True when running inside the Tauri WebView.
+ *
+ * In Tauri v2 the convenience global `window.__TAURI__` is only present when
+ * `app.withGlobalTauri` is enabled (it is not, here). The reliable signals are
+ * `window.__TAURI_INTERNALS__` — the IPC object the runtime always injects
+ * before page scripts run — and `window.__VMAN_API__`, which our shell injects
+ * at startup. Either one means we're in the desktop app.
+ */
 export function isTauri(): boolean {
-  return typeof window !== 'undefined' && typeof window.__TAURI__ !== 'undefined';
+  if (typeof window === 'undefined') return false;
+  return (
+    typeof window.__TAURI_INTERNALS__ !== 'undefined' ||
+    typeof window.__TAURI__ !== 'undefined' ||
+    typeof window.__VMAN_API__ === 'string'
+  );
 }
 
 function apiUrl(path: string): string {
