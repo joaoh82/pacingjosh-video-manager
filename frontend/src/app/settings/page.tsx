@@ -2,7 +2,15 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { getConfig, saveConfig, browseFolder } from '@/lib/api';
+import {
+  getConfig,
+  saveConfig,
+  browseFolder,
+  isTauri,
+  getAiSettings,
+  saveAiSettings,
+} from '@/lib/api';
+import type { AiSettings, AiSettingsUpdate } from '@/lib/types';
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -15,6 +23,15 @@ export default function SettingsPage() {
   const [videoDirectory, setVideoDirectory] = useState('');
   const [thumbnailCount, setThumbnailCount] = useState(5);
   const [thumbnailWidth, setThumbnailWidth] = useState(320);
+
+  // AI / LLM settings (desktop only)
+  const [showAi] = useState(isTauri());
+  const [aiSettings, setAiSettings] = useState<AiSettings | null>(null);
+  const [aiForm, setAiForm] = useState<AiSettingsUpdate>({});
+  const [aiKeys, setAiKeys] = useState({ gemini: '', openai: '', anthropic: '' });
+  const [isSavingAi, setIsSavingAi] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiSuccess, setAiSuccess] = useState<string | null>(null);
 
   useEffect(() => {
     loadSettings();
@@ -30,6 +47,47 @@ export default function SettingsPage() {
       setError(err.message || 'Failed to load settings');
     } finally {
       setIsLoading(false);
+    }
+
+    if (isTauri()) {
+      try {
+        const ai = await getAiSettings();
+        setAiSettings(ai);
+        setAiForm({
+          text_provider: ai.text_provider,
+          text_model: ai.text_model,
+          transcription_provider: ai.transcription_provider,
+          transcription_model: ai.transcription_model,
+        });
+      } catch {
+        // AI settings are optional; ignore load failures.
+      }
+    }
+  };
+
+  const handleSaveAi = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSavingAi(true);
+    setAiError(null);
+    setAiSuccess(null);
+
+    const payload: AiSettingsUpdate = { ...aiForm };
+    if (aiKeys.gemini.trim()) payload.gemini_api_key = aiKeys.gemini.trim();
+    if (aiKeys.openai.trim()) payload.openai_api_key = aiKeys.openai.trim();
+    if (aiKeys.anthropic.trim()) payload.anthropic_api_key = aiKeys.anthropic.trim();
+
+    try {
+      await saveAiSettings(payload);
+      setAiSuccess('AI settings saved!');
+      setTimeout(() => setAiSuccess(null), 3000);
+      setAiKeys({ gemini: '', openai: '', anthropic: '' });
+      // Refresh key-presence indicators.
+      const ai = await getAiSettings();
+      setAiSettings(ai);
+    } catch (err: any) {
+      setAiError(err.message || 'Failed to save AI settings');
+    } finally {
+      setIsSavingAi(false);
     }
   };
 
@@ -213,6 +271,129 @@ export default function SettingsPage() {
             </button>
           </div>
         </form>
+
+        {/* AI / LLM Settings (desktop only) */}
+        {showAi && (
+          <form onSubmit={handleSaveAi} className="mt-6 space-y-6">
+            <div className="card">
+              <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-1">
+                AI / LLM
+              </h2>
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                Used to transcribe portrait videos and generate thumbnail text and
+                Instagram / TikTok / YouTube Short descriptions. Keys are stored locally
+                and never displayed after saving.
+              </p>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Text provider
+                  </label>
+                  <select
+                    value={aiForm.text_provider || 'gemini'}
+                    onChange={(e) => setAiForm({ ...aiForm, text_provider: e.target.value })}
+                    className="input"
+                  >
+                    <option value="gemini">Google Gemini</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="anthropic">Anthropic Claude</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Text model
+                  </label>
+                  <input
+                    type="text"
+                    value={aiForm.text_model || ''}
+                    onChange={(e) => setAiForm({ ...aiForm, text_model: e.target.value })}
+                    className="input"
+                    placeholder="e.g. gemini-2.0-flash, gpt-4o, claude-sonnet-4-6"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Transcription provider
+                  </label>
+                  <select
+                    value={aiForm.transcription_provider || 'gemini'}
+                    onChange={(e) =>
+                      setAiForm({ ...aiForm, transcription_provider: e.target.value })
+                    }
+                    className="input"
+                  >
+                    <option value="gemini">Google Gemini</option>
+                    <option value="openai">OpenAI (Whisper)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Transcription model
+                  </label>
+                  <input
+                    type="text"
+                    value={aiForm.transcription_model || ''}
+                    onChange={(e) =>
+                      setAiForm({ ...aiForm, transcription_model: e.target.value })
+                    }
+                    className="input"
+                    placeholder="e.g. gemini-2.0-flash, whisper-1"
+                  />
+                </div>
+              </div>
+
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-3">
+                Note: Anthropic Claude does not transcribe audio — choose Gemini or OpenAI as
+                the transcription provider.
+              </p>
+
+              <div className="mt-5 space-y-4">
+                {([
+                  { key: 'gemini', label: 'Gemini API key', set: aiSettings?.gemini_api_key_set },
+                  { key: 'openai', label: 'OpenAI API key', set: aiSettings?.openai_api_key_set },
+                  { key: 'anthropic', label: 'Anthropic API key', set: aiSettings?.anthropic_api_key_set },
+                ] as const).map(({ key, label, set }) => (
+                  <div key={key}>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                      {label}
+                      {set && (
+                        <span className="ml-2 text-xs text-green-600 dark:text-green-400">
+                          ✓ saved
+                        </span>
+                      )}
+                    </label>
+                    <input
+                      type="password"
+                      autoComplete="off"
+                      value={aiKeys[key]}
+                      onChange={(e) => setAiKeys({ ...aiKeys, [key]: e.target.value })}
+                      className="input"
+                      placeholder={set ? 'Leave blank to keep current key' : 'Paste API key'}
+                    />
+                  </div>
+                ))}
+              </div>
+
+              {aiError && (
+                <div className="mt-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+                  <p className="text-sm text-red-600 dark:text-red-400">{aiError}</p>
+                </div>
+              )}
+              {aiSuccess && (
+                <div className="mt-4 p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
+                  <p className="text-sm text-green-600 dark:text-green-400">{aiSuccess}</p>
+                </div>
+              )}
+
+              <div className="mt-5 flex justify-end">
+                <button type="submit" disabled={isSavingAi} className="btn btn-primary">
+                  {isSavingAi ? 'Saving...' : 'Save AI Settings'}
+                </button>
+              </div>
+            </div>
+          </form>
+        )}
 
         {/* Additional Info */}
         <div className="mt-8 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">

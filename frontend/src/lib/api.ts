@@ -1,4 +1,12 @@
-import type { FilterState, Video, VideoUpdate, Production } from './types';
+import type {
+  FilterState,
+  Video,
+  VideoUpdate,
+  Production,
+  AiSettings,
+  AiSettingsUpdate,
+  AiGeneration,
+} from './types';
 
 declare global {
   interface Window {
@@ -279,5 +287,36 @@ export async function getScanStatus(scanId: string): Promise<ScanStatus> {
 export async function rescanDirectory(): Promise<ScanStartResponse> {
   return fetchApi<ScanStartResponse>('/api/scan/rescan', {
     method: 'POST',
+  });
+}
+
+// --- AI content generation (desktop only) ---
+
+export async function getAiSettings(): Promise<AiSettings> {
+  return fetchApi<AiSettings>('/api/ai/settings');
+}
+
+export async function saveAiSettings(
+  data: AiSettingsUpdate
+): Promise<{ status: string; message: string }> {
+  return fetchApi('/api/ai/settings', {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  });
+}
+
+/** Returns the saved generation for a video, or null if none exists yet. */
+export async function getAiGeneration(videoId: number): Promise<AiGeneration | null> {
+  return fetchApi<AiGeneration | null>(`/api/ai/generation/${videoId}`);
+}
+
+/** Runs transcription + copy generation. Can take 30s+; show a spinner. */
+export async function generateAiContent(
+  videoId: number,
+  regenerate = false
+): Promise<AiGeneration> {
+  return fetchApi<AiGeneration>(`/api/ai/generate/${videoId}`, {
+    method: 'POST',
+    body: JSON.stringify({ regenerate }),
   });
 }

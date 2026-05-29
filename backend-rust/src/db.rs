@@ -41,15 +41,20 @@ pub fn init_db(pool: &DbPool) {
 fn run_migrations(conn: &mut SqliteConnection) {
     use diesel::connection::SimpleConnection;
 
-    let up_sql = include_str!("../migrations/001_create_tables/up.sql");
+    // Embedded migrations, applied in order. Statements are split on semicolons
+    // and "already exists" errors are ignored so re-runs are idempotent.
+    let migrations = [
+        include_str!("../migrations/001_create_tables/up.sql"),
+        include_str!("../migrations/002_ai_generations/up.sql"),
+    ];
 
-    // Split by semicolons and execute each statement
-    // Skip empty statements
-    for statement in up_sql.split(';') {
-        let stmt = statement.trim();
-        if !stmt.is_empty() {
-            // Ignore errors from "already exists" on re-runs
-            conn.batch_execute(&format!("{};", stmt)).ok();
+    for up_sql in migrations {
+        for statement in up_sql.split(';') {
+            let stmt = statement.trim();
+            if !stmt.is_empty() {
+                // Ignore errors from "already exists" on re-runs
+                conn.batch_execute(&format!("{};", stmt)).ok();
+            }
         }
     }
 

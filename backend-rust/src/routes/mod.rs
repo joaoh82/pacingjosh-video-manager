@@ -4,3 +4,4 @@ pub mod videos;
 pub mod tags;
 pub mod stream;
 pub mod productions;
+pub mod ai;

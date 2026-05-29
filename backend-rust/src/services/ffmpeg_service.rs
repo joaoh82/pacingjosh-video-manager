@@ -128,8 +128,14 @@ pub fn extract_metadata(video_path: &Path) -> Option<VideoMetadata> {
         .map(|s| s.to_string());
 
     let resolution = video_stream.and_then(|s| {
-        let w = s["width"].as_i64()?;
-        let h = s["height"].as_i64()?;
+        let mut w = s["width"].as_i64()?;
+        let mut h = s["height"].as_i64()?;
+        // Account for display rotation so portrait phone footage that is stored
+        // as landscape + a rotation tag reports its true display orientation.
+        let rotation = stream_rotation(s);
+        if rotation == 90 || rotation == 270 {
+            std::mem::swap(&mut w, &mut h);
+        }
         Some(format!("{}x{}", w, h))
     });
 
@@ -157,6 +163,30 @@ pub fn extract_metadata(video_path: &Path) -> Option<VideoMetadata> {
         fps,
         created_date,
     })
+}
+
+/// Extract the display rotation (in degrees, normalized to 0/90/180/270) from a
+/// video stream's ffprobe JSON. Reads both the legacy `tags.rotate` field and
+/// the modern Display Matrix `side_data_list[].rotation` (which is negative).
+fn stream_rotation(stream: &serde_json::Value) -> i64 {
+    // Legacy container tag, e.g. "tags": { "rotate": "90" }
+    if let Some(rotate) = stream["tags"]["rotate"]
+        .as_str()
+        .and_then(|s| s.parse::<i64>().ok())
+    {
+        return rotate.rem_euclid(360);
+    }
+
+    // Modern Display Matrix side data, e.g. "rotation": -90
+    if let Some(list) = stream["side_data_list"].as_array() {
+        for sd in list {
+            if let Some(rot) = sd["rotation"].as_f64() {
+                return (rot.round() as i64).rem_euclid(360);
+            }
+        }
+    }
+
+    0
 }
 
 /// Parse FPS string from ffprobe (handles "30000/1001" and "30.0")
@@ -237,4 +267,38 @@ pub fn generate_thumbnails(
     }
 
     generated
+}
+
+/// Extract a compact mono audio track from a video for transcription. Returns
+/// the path to a temporary MP3 (mono, 16 kHz, 64 kbps) written under `out_dir`.
+/// The caller is responsible for deleting the file when done.
+pub fn extract_audio(video_path: &Path, out_dir: &Path) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
+
+    let stem = video_path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "audio".to_string());
+    let output_path = out_dir.join(format!("{}-{}.mp3", stem, std::process::id()));
+
+    let result = ffmpeg_cmd()
+        .arg("-i")
+        .arg(video_path)
+        .args([
+            "-vn",            // drop video
+            "-ac", "1",       // mono
+            "-ar", "16000",   // 16 kHz
+            "-b:a", "64k",
+            "-y",
+        ])
+        .arg(&output_path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output();
+
+    match result {
+        Ok(output) if output.status.success() && output_path.exists() => Ok(output_path),
+        Ok(_) => Err(format!("ffmpeg failed to extract audio from {:?}", video_path)),
+        Err(e) => Err(format!("Failed to run ffmpeg: {}", e)),
+    }
 }
