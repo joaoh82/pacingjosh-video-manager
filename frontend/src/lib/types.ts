@@ -6,6 +6,8 @@ export interface FilterState {
   production: number | null;
   dateFrom: Date | null;
   dateTo: Date | null;
+  /** '' = any, otherwise 'portrait' | 'landscape' | 'square'. */
+  orientation: string;
   sort: SortOption;
 }
 

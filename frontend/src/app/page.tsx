@@ -34,6 +34,7 @@ export default function HomePage() {
     production: null,
     dateFrom: null,
     dateTo: null,
+    orientation: '',
     sort: 'date_desc',
   });
 
@@ -118,6 +119,7 @@ export default function HomePage() {
       production: null,
       dateFrom: null,
       dateTo: null,
+      orientation: '',
       sort: 'date_desc',
     });
     setPagination({ ...pagination, page: 1 });
