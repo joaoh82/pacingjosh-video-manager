@@ -144,6 +144,7 @@ export async function getVideos(
   if (filters.category) params.set('category', filters.category);
   if (filters.tags.length) params.set('tags', filters.tags.join(','));
   if (filters.production !== null) params.set('production', String(filters.production));
+  if (filters.orientation) params.set('orientation', filters.orientation);
   if (filters.dateFrom) params.set('date_from', filters.dateFrom.toISOString());
   if (filters.dateTo) params.set('date_to', filters.dateTo.toISOString());
   params.set('sort', filters.sort);

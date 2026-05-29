@@ -39,6 +39,7 @@ export default function FilterPanel({
 
   const hasActiveFilters =
     filters.category ||
+    filters.orientation ||
     filters.tags.length > 0 ||
     filters.production !== null ||
     filters.dateFrom ||
@@ -80,6 +81,23 @@ export default function FilterPanel({
               {cat.name} ({cat.count})
             </option>
           ))}
+        </select>
+      </div>
+
+      {/* Orientation Filter */}
+      <div>
+        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+          Orientation
+        </label>
+        <select
+          value={filters.orientation}
+          onChange={(e) => onFilterChange({ orientation: e.target.value })}
+          className="input"
+        >
+          <option value="">All Orientations</option>
+          <option value="portrait">📱 Portrait (Shorts/Reels)</option>
+          <option value="landscape">🖥️ Landscape (Long-form)</option>
+          <option value="square">⬛ Square</option>
         </select>
       </div>
 

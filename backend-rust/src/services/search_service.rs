@@ -18,6 +18,7 @@ pub fn search_videos(
     production_id: Option<i32>,
     date_from: Option<NaiveDateTime>,
     date_to: Option<NaiveDateTime>,
+    orientation: Option<&str>,
     sort: &str,
     page: i64,
     limit: i64,
@@ -112,6 +113,25 @@ pub fn search_videos(
             .unwrap_or_default();
 
         filtered_ids = Some(intersect_ids(filtered_ids, date_ids));
+    }
+
+    // Orientation filter (derived from the resolution string, so we compute it
+    // in Rust rather than SQL, reusing the same logic as the API response).
+    if let Some(orient) = orientation {
+        if !orient.is_empty() {
+            let rows: Vec<(i32, Option<String>)> = videos::table
+                .select((videos::id, videos::resolution))
+                .load(conn)
+                .unwrap_or_default();
+
+            let orient_ids: Vec<i32> = rows
+                .into_iter()
+                .filter(|(_, res)| orientation_from_resolution(res).as_deref() == Some(orient))
+                .map(|(id, _)| id)
+                .collect();
+
+            filtered_ids = Some(intersect_ids(filtered_ids, orient_ids));
+        }
     }
 
     // Build final query from filtered IDs
