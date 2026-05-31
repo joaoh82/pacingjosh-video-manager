@@ -46,6 +46,7 @@ fn run_migrations(conn: &mut SqliteConnection) {
     let migrations = [
         include_str!("../migrations/001_create_tables/up.sql"),
         include_str!("../migrations/002_ai_generations/up.sql"),
+        include_str!("../migrations/003_ai_youtube_fields/up.sql"),
     ];
 
     for up_sql in migrations {

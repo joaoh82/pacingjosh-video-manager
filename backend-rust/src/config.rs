@@ -19,6 +19,30 @@ pub struct AiSettings {
     pub gemini_api_key: Option<String>,
     pub openai_api_key: Option<String>,
     pub anthropic_api_key: Option<String>,
+    /// System/instruction prompt used to generate social copy from a transcript.
+    /// Editable by the user. The literal token `{transcript}` is replaced with
+    /// the video transcript at generation time (appended if absent). Defaults via
+    /// serde so configs written before this field existed still load.
+    #[serde(default = "default_system_prompt")]
+    pub system_prompt: String,
+}
+
+/// The default copy-generation prompt. Exposed so the API can offer a
+/// "reset to default" affordance and so older configs can backfill it.
+pub fn default_system_prompt() -> String {
+    "You are a social media copywriter for short-form vertical videos (Instagram Reels, \
+TikTok, YouTube Shorts). Based ONLY on the following video transcript, produce engaging, \
+SEO-optimized copy.\n\n\
+Return STRICT JSON (no markdown, no commentary) with exactly these keys:\n\
+- \"thumbnail_texts\": array of 3 short, punchy on-screen thumbnail/hook text ideas (max ~6 words each)\n\
+- \"instagram_description\": an Instagram caption with a strong hook and SEO keywords\n\
+- \"tiktok_description\": a TikTok caption optimized for discovery\n\
+- \"youtube_short_title\": a punchy, SEO-optimized YouTube Shorts title (max ~70 characters, no hashtags)\n\
+- \"youtube_short_description\": a YouTube Shorts description with SEO keywords\n\
+- \"youtube_short_tags\": array of UP TO 15 SEO keyword tags for YouTube (plain keywords, no leading #)\n\
+- \"hashtags\": array of UP TO 5 relevant, high-traffic hashtags (each starting with #)\n\n\
+Keep captions concise and native to each platform. Do not invent facts not in the transcript.\n\n\
+TRANSCRIPT:\n\"\"\"\n{transcript}\n\"\"\"".to_string()
 }
 
 impl Default for AiSettings {
@@ -31,6 +55,7 @@ impl Default for AiSettings {
             gemini_api_key: None,
             openai_api_key: None,
             anthropic_api_key: None,
+            system_prompt: default_system_prompt(),
         }
     }
 }

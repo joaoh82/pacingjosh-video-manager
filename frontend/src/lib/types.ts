@@ -82,6 +82,10 @@ export interface AiSettings {
   gemini_api_key_set: boolean;
   openai_api_key_set: boolean;
   anthropic_api_key_set: boolean;
+  /** The editable copy-generation prompt currently in use. */
+  system_prompt: string;
+  /** The built-in default prompt, for offering a "reset to default". */
+  default_system_prompt: string;
 }
 
 /** Payload for saving AI settings. Blank/omitted keys are left unchanged. */
@@ -93,6 +97,8 @@ export interface AiSettingsUpdate {
   gemini_api_key?: string;
   openai_api_key?: string;
   anthropic_api_key?: string;
+  /** Omitted leaves it unchanged; an empty string resets it to the default. */
+  system_prompt?: string;
 }
 
 /** AI-generated content for a single (portrait) video. */
@@ -102,7 +108,9 @@ export interface AiGeneration {
   thumbnail_text: string[];
   instagram_description?: string | null;
   tiktok_description?: string | null;
+  youtube_short_title?: string | null;
   youtube_short_description?: string | null;
+  youtube_short_tags: string[];
   hashtags: string[];
   provider?: string | null;
   model?: string | null;
