@@ -548,6 +548,7 @@ export default function VideoModal({
                     {[
                       { key: 'instagram', label: 'Instagram description', value: aiGen.instagram_description },
                       { key: 'tiktok', label: 'TikTok description', value: aiGen.tiktok_description },
+                      { key: 'youtube-title', label: 'YouTube Short title', value: aiGen.youtube_short_title },
                       { key: 'youtube', label: 'YouTube Short description', value: aiGen.youtube_short_description },
                     ].map(({ key, label, value }) =>
                       value ? (
@@ -568,6 +569,35 @@ export default function VideoModal({
                           </p>
                         </div>
                       ) : null
+                    )}
+
+                    {/* YouTube keyword tags */}
+                    {aiGen.youtube_short_tags.length > 0 && (
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-sm font-medium text-gray-600 dark:text-gray-400">
+                            YouTube tags
+                          </span>
+                          <button
+                            onClick={() =>
+                              copyToClipboard('yt-tags', aiGen.youtube_short_tags.join(', '))
+                            }
+                            className="text-xs text-primary-600 dark:text-primary-400 hover:underline"
+                          >
+                            {copiedKey === 'yt-tags' ? 'Copied!' : 'Copy all'}
+                          </button>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {aiGen.youtube_short_tags.map((t, i) => (
+                            <span
+                              key={i}
+                              className="badge bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-200 text-xs"
+                            >
+                              {t}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
                     )}
 
                     {/* Hashtags */}

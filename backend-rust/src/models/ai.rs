@@ -15,7 +15,9 @@ pub struct AiGeneration {
     pub thumbnail_text: Option<String>,
     pub instagram_description: Option<String>,
     pub tiktok_description: Option<String>,
+    pub youtube_short_title: Option<String>,
     pub youtube_short_description: Option<String>,
+    pub youtube_short_tags: Option<String>,
     pub hashtags: Option<String>,
     pub provider: Option<String>,
     pub model: Option<String>,
@@ -30,7 +32,9 @@ pub struct NewAiGeneration {
     pub thumbnail_text: Option<String>,
     pub instagram_description: Option<String>,
     pub tiktok_description: Option<String>,
+    pub youtube_short_title: Option<String>,
     pub youtube_short_description: Option<String>,
+    pub youtube_short_tags: Option<String>,
     pub hashtags: Option<String>,
     pub provider: Option<String>,
     pub model: Option<String>,
@@ -45,7 +49,9 @@ pub struct AiGenerationResponse {
     pub thumbnail_text: Vec<String>,
     pub instagram_description: Option<String>,
     pub tiktok_description: Option<String>,
+    pub youtube_short_title: Option<String>,
     pub youtube_short_description: Option<String>,
+    pub youtube_short_tags: Vec<String>,
     pub hashtags: Vec<String>,
     pub provider: Option<String>,
     pub model: Option<String>,
@@ -56,6 +62,11 @@ impl From<AiGeneration> for AiGenerationResponse {
     fn from(g: AiGeneration) -> Self {
         let thumbnail_text = g
             .thumbnail_text
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
+            .unwrap_or_default();
+        let youtube_short_tags = g
+            .youtube_short_tags
             .as_deref()
             .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
             .unwrap_or_default();
@@ -71,7 +82,9 @@ impl From<AiGeneration> for AiGenerationResponse {
             thumbnail_text,
             instagram_description: g.instagram_description,
             tiktok_description: g.tiktok_description,
+            youtube_short_title: g.youtube_short_title,
             youtube_short_description: g.youtube_short_description,
+            youtube_short_tags,
             hashtags,
             provider: g.provider,
             model: g.model,

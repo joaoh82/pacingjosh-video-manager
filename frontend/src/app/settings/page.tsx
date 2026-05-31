@@ -58,6 +58,7 @@ export default function SettingsPage() {
           text_model: ai.text_model,
           transcription_provider: ai.transcription_provider,
           transcription_model: ai.transcription_model,
+          system_prompt: ai.system_prompt,
         });
       } catch {
         // AI settings are optional; ignore load failures.
@@ -373,6 +374,49 @@ export default function SettingsPage() {
                     />
                   </div>
                 ))}
+              </div>
+
+              {/* Editable system prompt */}
+              <div className="mt-6">
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Content generation prompt
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      aiSettings &&
+                      setAiForm({ ...aiForm, system_prompt: aiSettings.default_system_prompt })
+                    }
+                    disabled={
+                      !aiSettings || aiForm.system_prompt === aiSettings.default_system_prompt
+                    }
+                    className="text-xs text-primary-600 dark:text-primary-400 hover:underline disabled:opacity-40 disabled:no-underline"
+                  >
+                    Reset to default
+                  </button>
+                </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+                  The instructions sent to the text model. Use the token{' '}
+                  <code className="px-1 bg-gray-100 dark:bg-gray-700 rounded">{'{transcript}'}</code>{' '}
+                  where the video transcript should be inserted (it&apos;s appended automatically if
+                  you remove it). The model must return JSON with the keys{' '}
+                  <code className="px-1 bg-gray-100 dark:bg-gray-700 rounded">thumbnail_texts</code>,{' '}
+                  <code className="px-1 bg-gray-100 dark:bg-gray-700 rounded">instagram_description</code>,{' '}
+                  <code className="px-1 bg-gray-100 dark:bg-gray-700 rounded">tiktok_description</code>,{' '}
+                  <code className="px-1 bg-gray-100 dark:bg-gray-700 rounded">youtube_short_title</code>,{' '}
+                  <code className="px-1 bg-gray-100 dark:bg-gray-700 rounded">youtube_short_description</code>,{' '}
+                  <code className="px-1 bg-gray-100 dark:bg-gray-700 rounded">youtube_short_tags</code>, and{' '}
+                  <code className="px-1 bg-gray-100 dark:bg-gray-700 rounded">hashtags</code>.
+                </p>
+                <textarea
+                  value={aiForm.system_prompt ?? ''}
+                  onChange={(e) => setAiForm({ ...aiForm, system_prompt: e.target.value })}
+                  rows={14}
+                  spellCheck={false}
+                  className="input font-mono text-xs leading-relaxed"
+                  placeholder="Loading prompt…"
+                />
               </div>
 
               {aiError && (

@@ -28,7 +28,11 @@ pub struct GeneratedContent {
     #[serde(default)]
     pub tiktok_description: String,
     #[serde(default)]
+    pub youtube_short_title: String,
+    #[serde(default)]
     pub youtube_short_description: String,
+    #[serde(default)]
+    pub youtube_short_tags: Vec<String>,
     #[serde(default)]
     pub hashtags: Vec<String>,
 }
@@ -127,21 +131,15 @@ async fn transcribe_gemini(bytes: Vec<u8>, ai: &AiSettings) -> Result<String, St
 
 // --- Content generation ------------------------------------------------------
 
-fn build_prompt(transcript: &str) -> String {
-    format!(
-        "You are a social media copywriter for short-form vertical videos (Instagram Reels, \
-TikTok, YouTube Shorts). Based ONLY on the following video transcript, produce engaging, \
-SEO-optimized copy.\n\n\
-Return STRICT JSON (no markdown, no commentary) with exactly these keys:\n\
-- \"thumbnail_texts\": array of 3 short, punchy on-screen thumbnail/hook text ideas (max ~6 words each)\n\
-- \"instagram_description\": an Instagram caption with a strong hook and SEO keywords\n\
-- \"tiktok_description\": a TikTok caption optimized for discovery\n\
-- \"youtube_short_description\": a YouTube Shorts description with SEO keywords\n\
-- \"hashtags\": array of UP TO 5 relevant, high-traffic hashtags (each starting with #)\n\n\
-Keep captions concise and native to each platform. Do not invent facts not in the transcript.\n\n\
-TRANSCRIPT:\n\"\"\"\n{}\n\"\"\"",
-        transcript
-    )
+/// Build the final prompt from the user-configurable template. The literal
+/// token `{transcript}` is substituted with the transcript; if the template
+/// omits it, the transcript is appended so generation still has the source text.
+fn build_prompt(template: &str, transcript: &str) -> String {
+    if template.contains("{transcript}") {
+        template.replace("{transcript}", transcript)
+    } else {
+        format!("{}\n\nTRANSCRIPT:\n\"\"\"\n{}\n\"\"\"", template, transcript)
+    }
 }
 
 /// Generate social copy from a transcript using the configured text provider.
@@ -149,7 +147,7 @@ pub async fn generate_content(
     transcript: &str,
     ai: &AiSettings,
 ) -> Result<GeneratedContent, String> {
-    let prompt = build_prompt(transcript);
+    let prompt = build_prompt(&ai.system_prompt, transcript);
     let raw = match ai.text_provider.as_str() {
         "gemini" => generate_gemini(&prompt, ai).await?,
         "openai" => generate_openai(&prompt, ai).await?,
@@ -161,8 +159,9 @@ pub async fn generate_content(
     let mut content: GeneratedContent =
         serde_json::from_str(json).map_err(|e| format!("Failed to parse model JSON: {} — raw: {}", e, raw))?;
 
-    // Enforce the "up to 5 hashtags" contract regardless of model behavior.
+    // Enforce the array-size contracts regardless of model behavior.
     content.hashtags.truncate(5);
+    content.youtube_short_tags.truncate(15);
     Ok(content)
 }
 
@@ -322,7 +321,9 @@ pub fn upsert_generation(
         thumbnail_text: Some(serde_json::to_string(&content.thumbnail_texts).unwrap_or_else(|_| "[]".into())),
         instagram_description: Some(content.instagram_description.clone()),
         tiktok_description: Some(content.tiktok_description.clone()),
+        youtube_short_title: Some(content.youtube_short_title.clone()),
         youtube_short_description: Some(content.youtube_short_description.clone()),
+        youtube_short_tags: Some(serde_json::to_string(&content.youtube_short_tags).unwrap_or_else(|_| "[]".into())),
         hashtags: Some(serde_json::to_string(&content.hashtags).unwrap_or_else(|_| "[]".into())),
         provider: Some(provider.to_string()),
         model: Some(model.to_string()),

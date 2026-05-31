@@ -2,7 +2,7 @@ use actix_web::{get, post, put, web, HttpResponse};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-use crate::config::ConfigManager;
+use crate::config::{default_system_prompt, ConfigManager};
 use crate::db::DbPool;
 use crate::models::AiGenerationResponse;
 use crate::services::{ai_service, ffmpeg_service, video_service};
@@ -20,6 +20,8 @@ async fn get_ai_settings(config: web::Data<ConfigManager>) -> HttpResponse {
         "gemini_api_key_set": key_set(&ai.gemini_api_key),
         "openai_api_key_set": key_set(&ai.openai_api_key),
         "anthropic_api_key_set": key_set(&ai.anthropic_api_key),
+        "system_prompt": ai.system_prompt,
+        "default_system_prompt": default_system_prompt(),
     }))
 }
 
@@ -37,6 +39,9 @@ pub struct AiSettingsRequest {
     pub gemini_api_key: Option<String>,
     pub openai_api_key: Option<String>,
     pub anthropic_api_key: Option<String>,
+    /// Copy-generation prompt. Omitted leaves it unchanged; an empty string
+    /// resets it to the built-in default.
+    pub system_prompt: Option<String>,
 }
 
 #[put("/ai/settings")]
@@ -55,6 +60,15 @@ async fn save_ai_settings(
     update_key(&mut ai.gemini_api_key, &body.gemini_api_key);
     update_key(&mut ai.openai_api_key, &body.openai_api_key);
     update_key(&mut ai.anthropic_api_key, &body.anthropic_api_key);
+
+    // An empty/whitespace prompt resets to the default; otherwise store as given.
+    if let Some(p) = &body.system_prompt {
+        ai.system_prompt = if p.trim().is_empty() {
+            default_system_prompt()
+        } else {
+            p.clone()
+        };
+    }
 
     match config.save_ai_settings(ai) {
         Ok(()) => HttpResponse::Ok().json(serde_json::json!({
