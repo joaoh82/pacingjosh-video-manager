@@ -82,10 +82,15 @@ export interface AiSettings {
   gemini_api_key_set: boolean;
   openai_api_key_set: boolean;
   anthropic_api_key_set: boolean;
+  elevenlabs_api_key_set: boolean;
   /** The editable copy-generation prompt currently in use. */
   system_prompt: string;
   /** The built-in default prompt, for offering a "reset to default". */
   default_system_prompt: string;
+  /** The editable video-edit pipeline planning prompt currently in use. */
+  edit_prompt: string;
+  /** The built-in default edit prompt, for offering a "reset to default". */
+  default_edit_prompt: string;
 }
 
 /** Payload for saving AI settings. Blank/omitted keys are left unchanged. */
@@ -97,8 +102,11 @@ export interface AiSettingsUpdate {
   gemini_api_key?: string;
   openai_api_key?: string;
   anthropic_api_key?: string;
+  elevenlabs_api_key?: string;
   /** Omitted leaves it unchanged; an empty string resets it to the default. */
   system_prompt?: string;
+  /** Omitted leaves it unchanged; an empty string resets it to the default. */
+  edit_prompt?: string;
 }
 
 /** AI-generated content for a single (portrait) video. */
@@ -124,4 +132,64 @@ export interface VideoUpdate {
   notes?: string | null;
   tags?: string[];
   production_ids?: number[];
+}
+
+// --- Video edit pipeline (desktop) ---
+
+/** One clip in the assembled edit decision list. */
+export interface EditClip {
+  order: number;
+  video_id: number;
+  filename: string;
+  start: number;
+  end: number;
+  duration: number;
+  reason?: string | null;
+}
+
+/** The edit decision list produced by the pipeline. */
+export interface EditDecisionList {
+  production_id: number;
+  production_title: string;
+  generated_at: string;
+  transcription_provider?: string;
+  text_provider?: string;
+  text_model?: string;
+  clips: EditClip[];
+  output?: string | null;
+}
+
+/** Live progress for a running edit pipeline job. */
+export interface EditJobStatus {
+  job_id: string;
+  production_id: number;
+  status: 'in_progress' | 'completed' | 'failed';
+  stage: string;
+  message: string;
+  processed: number;
+  total: number;
+  logs: string[];
+  error?: string | null;
+  edl?: EditDecisionList | null;
+  output_path?: string | null;
+  edl_path?: string | null;
+  elapsed_seconds: number;
+  start_time: string;
+  end_time?: string | null;
+}
+
+/** A persisted edit result for a production (latest attempt). */
+export interface ProductionEdit {
+  id: number;
+  production_id: number;
+  status: string;
+  instructions?: string | null;
+  edl?: EditDecisionList | null;
+  output_path?: string | null;
+  edl_path?: string | null;
+  error?: string | null;
+  transcription_provider?: string | null;
+  text_provider?: string | null;
+  text_model?: string | null;
+  created_at: string;
 }

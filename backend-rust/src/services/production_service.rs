@@ -2,7 +2,19 @@ use diesel::prelude::*;
 use diesel::sqlite::SqliteConnection;
 
 use crate::models::*;
-use crate::schema::{productions, video_productions};
+use crate::schema::{productions, video_productions, videos};
+
+/// Load all videos linked to a production, ordered by creation date then id so
+/// the edit pipeline sees takes in roughly the order they were recorded.
+pub fn get_production_videos(conn: &mut SqliteConnection, production_id: i32) -> Vec<Video> {
+    videos::table
+        .inner_join(video_productions::table.on(video_productions::video_id.eq(videos::id)))
+        .filter(video_productions::production_id.eq(production_id))
+        .select(Video::as_select())
+        .order((videos::created_date.asc(), videos::id.asc()))
+        .load(conn)
+        .unwrap_or_default()
+}
 
 /// Get all productions with video counts
 pub fn get_all_productions(conn: &mut SqliteConnection) -> Vec<ProductionResponse> {

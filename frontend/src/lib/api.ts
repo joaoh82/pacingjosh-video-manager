@@ -6,6 +6,8 @@ import type {
   AiSettings,
   AiSettingsUpdate,
   AiGeneration,
+  EditJobStatus,
+  ProductionEdit,
 } from './types';
 
 declare global {
@@ -334,4 +336,44 @@ export async function generateAiContent(
     method: 'POST',
     body: JSON.stringify({ regenerate }),
   });
+}
+
+// --- Video edit pipeline (desktop only) ---
+
+export interface StartEditResponse {
+  status: string;
+  job_id: string;
+  message: string;
+}
+
+/**
+ * Start the "Edit & Create Video" pipeline for a production. Transcribes every
+ * take, asks the LLM to assemble the best cut from the script, then stitches
+ * the final clip with ffmpeg. Returns a job id to poll with getEditStatus.
+ */
+export async function startProductionEdit(
+  productionId: number,
+  data: { script: string; instructions?: string }
+): Promise<StartEditResponse> {
+  return fetchApi<StartEditResponse>(`/api/productions/${productionId}/edit`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+/** Poll live progress for a running (or finished) edit job. */
+export async function getEditStatus(jobId: string): Promise<EditJobStatus> {
+  return fetchApi<EditJobStatus>(`/api/edit/status/${jobId}`);
+}
+
+/** The latest persisted edit result for a production, or null if none. */
+export async function getProductionEdit(
+  productionId: number
+): Promise<ProductionEdit | null> {
+  return fetchApi<ProductionEdit | null>(`/api/productions/${productionId}/edit`);
+}
+
+/** Reveal the latest final video (or the edit folder) in the OS file browser. */
+export async function revealEditOutput(productionId: number): Promise<void> {
+  await fetchApi(`/api/productions/${productionId}/edit/reveal`, { method: 'POST' });
 }

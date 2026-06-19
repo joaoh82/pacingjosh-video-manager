@@ -22,6 +22,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use crate::config::ConfigManager;
+use crate::services::edit_service::EditJobMap;
 use crate::services::ffmpeg_service::FfmpegPaths;
 use crate::services::scanner::ScanMap;
 
@@ -87,6 +88,9 @@ pub async fn run(paths: BackendPaths) -> std::io::Result<()> {
     // Scan progress map
     let scan_map: ScanMap = Arc::new(Mutex::new(HashMap::new()));
 
+    // Edit pipeline progress map
+    let edit_map: EditJobMap = Arc::new(Mutex::new(HashMap::new()));
+
     let cors_origins = settings.cors_origins.clone();
 
     println!("============================================================");
@@ -105,6 +109,7 @@ pub async fn run(paths: BackendPaths) -> std::io::Result<()> {
     let config_data = web::Data::new(config_manager);
     let pool_data = web::Data::new(pool);
     let scan_data = web::Data::new(scan_map);
+    let edit_data = web::Data::new(edit_map);
 
     HttpServer::new(move || {
         let cors = Cors::default()
@@ -129,6 +134,7 @@ pub async fn run(paths: BackendPaths) -> std::io::Result<()> {
             .app_data(config_data.clone())
             .app_data(pool_data.clone())
             .app_data(scan_data.clone())
+            .app_data(edit_data.clone())
             .service(root)
             .service(health)
             .service(
@@ -139,7 +145,8 @@ pub async fn run(paths: BackendPaths) -> std::io::Result<()> {
                     .configure(routes::tags::configure)
                     .configure(routes::stream::configure)
                     .configure(routes::productions::configure)
-                    .configure(routes::ai::configure),
+                    .configure(routes::ai::configure)
+                    .configure(routes::edit::configure),
             )
     })
     .bind(paths.bind_addr)?

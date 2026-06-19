@@ -40,6 +40,14 @@ Video Log Manager
 - **Platform & Status** - Track platform, publish link, and draft/published status per production
 - **Production Filtering** - Filter the video grid by production to see which clips belong where
 
+### AI & Automated Editing (desktop)
+
+- **Transcription** - Transcribe videos via ElevenLabs (Scribe), OpenAI (Whisper), or Google Gemini
+- **Social Copy Generation** - Generate thumbnail text and Instagram / TikTok / YouTube Short titles, descriptions, tags, and hashtags from a portrait video's transcript
+- **Edit & Create Video Pipeline** - Add raw takes to a production, paste your script, and the app transcribes every take (with word-level timestamps), asks an LLM to assemble the best cut (newest clean takes, re-shoots in timeline order, warm-up "Hey …" intros trimmed), writes an **edit decision list** as JSON, then stitches the final clip with FFmpeg — all tracked with live progress
+- **Editable Prompts** - Both the copy-generation prompt and the edit-planning prompt are editable in Settings
+- **Local Keys** - API keys are stored locally in `config.json` and never returned by the API after saving
+
 ### Advanced Features
 
 - **Metadata Editing** - Edit all metadata inline
@@ -250,6 +258,24 @@ npm run dev
 3. Mark productions as published or draft
 4. Link videos to productions from the video detail modal or via bulk edit
 
+### Creating a Video with the Edit Pipeline (desktop)
+
+> Requires the desktop app, FFmpeg, and AI keys configured under **Settings → AI / LLM**
+> (an ElevenLabs / OpenAI / Gemini transcription key and a Gemini / OpenAI / Anthropic text key).
+
+1. Create a production and add all the raw takes of your video to it (drag them in via bulk edit or the video modal).
+2. Open **Productions**, then click the **🎬 clapperboard** button on that production.
+3. Paste your **script** (Markdown is fine — scene breaks help the editor align takes) and, optionally, extra instructions (e.g. the warm-up phrase to cut, or "I re-shot scene 1 at the end").
+4. Click **Run pipeline**. The app will, in order:
+   - Transcribe every take with word-level timestamps,
+   - Ask the configured LLM to assemble the best cut from your script,
+   - Write an **edit decision list** (per-clip `video_id` + time ranges) to JSON, and
+   - Stitch the final clip with FFmpeg.
+5. When it finishes, review the per-clip breakdown and click **Reveal final video** to open it in your file browser.
+
+Output (the EDL JSON and the final `.mp4`) is written to the app-data directory under
+`edits/production-<id>/`.
+
 ### Editing Metadata
 
 **Single Video:**
@@ -351,6 +377,18 @@ GET    /api/stream/{id}             - Stream video
 GET    /api/thumbnails/{id}/{index} - Get thumbnail
 GET    /api/config                  - Get configuration
 PUT    /api/config                  - Update configuration
+
+# AI content generation (desktop)
+GET    /api/ai/settings             - Get AI provider settings (keys are write-only)
+PUT    /api/ai/settings             - Update AI providers, keys, and prompts
+GET    /api/ai/generation/{id}      - Get saved social copy for a video
+POST   /api/ai/generate/{id}        - Transcribe + generate social copy
+
+# Edit & Create Video pipeline (desktop)
+POST   /api/productions/{id}/edit          - Start the edit pipeline (returns job_id)
+GET    /api/edit/status/{job_id}           - Poll live pipeline progress
+GET    /api/productions/{id}/edit          - Latest persisted edit result (EDL + output)
+POST   /api/productions/{id}/edit/reveal   - Reveal the final video in the file browser
 ```
 
 ## Database Schema
@@ -382,6 +420,20 @@ PUT    /api/config                  - Update configuration
 **video_productions**
 
 - video_id, production_id (junction table)
+
+**ai_generations**
+
+- id, video_id, transcript
+- thumbnail_text, instagram_description, tiktok_description
+- youtube_short_title, youtube_short_description, youtube_short_tags, hashtags
+- provider, model, generated_at
+
+**production_edits**
+
+- id, production_id, status
+- script, instructions, edl_json (the edit decision list)
+- output_path, edl_path, error
+- transcription_provider, text_provider, text_model, created_at
 
 ## Development
 

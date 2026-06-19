@@ -12,19 +12,30 @@ pub struct AiSettings {
     pub text_provider: String,
     /// Model id for text generation (e.g. "gemini-2.0-flash", "gpt-4o").
     pub text_model: String,
-    /// Provider used for transcription: "gemini" | "openai".
+    /// Provider used for transcription: "elevenlabs" | "openai" | "gemini".
     pub transcription_provider: String,
-    /// Model id for transcription (e.g. "whisper-1", "gemini-2.0-flash").
+    /// Model id for transcription (e.g. "scribe_v1", "whisper-1", "gemini-2.0-flash").
     pub transcription_model: String,
     pub gemini_api_key: Option<String>,
     pub openai_api_key: Option<String>,
     pub anthropic_api_key: Option<String>,
+    /// ElevenLabs API key, used by the Scribe speech-to-text service. Like the
+    /// other keys it is write-only over the API. Defaults via serde so configs
+    /// written before this field existed still load.
+    #[serde(default)]
+    pub elevenlabs_api_key: Option<String>,
     /// System/instruction prompt used to generate social copy from a transcript.
     /// Editable by the user. The literal token `{transcript}` is replaced with
     /// the video transcript at generation time (appended if absent). Defaults via
     /// serde so configs written before this field existed still load.
     #[serde(default = "default_system_prompt")]
     pub system_prompt: String,
+    /// Instruction prompt used by the video-edit pipeline to turn a script plus
+    /// the per-take timestamped transcripts into an edit decision list. Editable
+    /// by the user. The literal tokens `{script}` and `{transcripts}` are replaced
+    /// at run time. Defaults via serde so older configs still load.
+    #[serde(default = "default_edit_prompt")]
+    pub edit_prompt: String,
 }
 
 /// The default copy-generation prompt. Exposed so the API can offer a
@@ -45,6 +56,45 @@ Keep captions concise and native to each platform. Do not invent facts not in th
 TRANSCRIPT:\n\"\"\"\n{transcript}\n\"\"\"".to_string()
 }
 
+/// The default video-edit-planning prompt. Drives the pipeline that stitches
+/// the best raw takes into a final clip. Exposed so the API can offer a
+/// "reset to default" affordance and so older configs can backfill it.
+pub fn default_edit_prompt() -> String {
+    "You are a meticulous video editor. You are given a SCRIPT for a video and a set of \
+RAW TAKES. Each take is one recording attempt; there are usually multiple takes per scene. \
+For every take you get its video_id, filename, duration, and a transcript with word-level \
+timestamps (in seconds).\n\n\
+Your job is to assemble an edit decision list (EDL) that stitches the best takes into one \
+final video, following the script from beginning to end.\n\n\
+Guidelines:\n\
+- Follow the SCRIPT order. Produce one entry per scene in the script, in timeline order.\n\
+- For each scene, pick the take(s) whose transcript best matches that part of the script.\n\
+- When several takes cover the same scene, the best take is USUALLY the latest one with the \
+fewest filler words (\"um\", \"uh\", false starts, stumbles) — but use judgement; an earlier, \
+cleaner take can win.\n\
+- The creator may have RE-SHOT an early scene near the end of the session. Place every clip \
+where it belongs in the SCRIPT's timeline, regardless of recording order.\n\
+- Creators often warm up by saying something like \"Hey <name>\" or repeating the first words \
+before the real take. Trim that lead-in: set the clip `start` to the moment the real scripted \
+line begins.\n\
+- Trim trailing dead air, restarts, and out-of-script chatter by choosing a tight `end`.\n\
+- `start` and `end` are in seconds and MUST fall within that take's duration, with end > start.\n\n\
+Return STRICT JSON (no markdown, no commentary) with exactly this shape:\n\
+{\n\
+  \"scenes\": [\n\
+    {\n\
+      \"scene_number\": 1,\n\
+      \"scene_description\": \"short label for this scene\",\n\
+      \"clips\": [\n\
+        { \"video_id\": 12, \"start\": 2.4, \"end\": 11.0, \"reason\": \"why this take/range\" }\n\
+      ]\n\
+    }\n\
+  ]\n\
+}\n\n\
+SCRIPT:\n\"\"\"\n{script}\n\"\"\"\n\n\
+RAW TAKES (with word-level timestamps):\n\"\"\"\n{transcripts}\n\"\"\"".to_string()
+}
+
 impl Default for AiSettings {
     fn default() -> Self {
         Self {
@@ -55,7 +105,9 @@ impl Default for AiSettings {
             gemini_api_key: None,
             openai_api_key: None,
             anthropic_api_key: None,
+            elevenlabs_api_key: None,
             system_prompt: default_system_prompt(),
+            edit_prompt: default_edit_prompt(),
         }
     }
 }
@@ -298,6 +350,19 @@ impl ConfigManager {
     pub fn get_thumbnail_directory(&self) -> PathBuf {
         let settings = self.settings.read().unwrap();
         let path = PathBuf::from(&settings.thumbnail_directory);
+        std::fs::create_dir_all(&path).ok();
+        path
+    }
+
+    /// Base directory for video-edit pipeline output (EDL JSON + final clips),
+    /// rooted at the app-data dir alongside the database and thumbnails.
+    pub fn get_edits_directory(&self) -> PathBuf {
+        let base = self
+            .config_path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."));
+        let path = base.join("edits");
         std::fs::create_dir_all(&path).ok();
         path
     }

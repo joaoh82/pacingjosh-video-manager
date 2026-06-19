@@ -302,3 +302,122 @@ pub fn extract_audio(video_path: &Path, out_dir: &Path) -> Result<PathBuf, Strin
         Err(e) => Err(format!("Failed to run ffmpeg: {}", e)),
     }
 }
+
+/// Extract a single clip `[start, end)` (seconds) from `input` and normalize it
+/// to a fixed `width`x`height`/`fps`, H.264 + AAC, yuv420p. Normalizing every
+/// segment to the same spec lets the final concat use stream copy. Returns an
+/// error (with the tail of ffmpeg's stderr) on failure.
+pub fn extract_clip_segment(
+    input: &Path,
+    start: f32,
+    end: f32,
+    width: i32,
+    height: i32,
+    fps: f32,
+    out_path: &Path,
+) -> Result<(), String> {
+    let duration = end - start;
+    if duration <= 0.0 {
+        return Err(format!("Invalid clip range: start {} >= end {}", start, end));
+    }
+    if let Some(parent) = out_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    // Even dimensions only — libx264/yuv420p requires width and height divisible by 2.
+    let w = (width.max(2) / 2) * 2;
+    let h = (height.max(2) / 2) * 2;
+    let fps = if fps > 0.0 { fps } else { 30.0 };
+
+    let vf = format!(
+        "scale={w}:{h}:force_original_aspect_ratio=decrease,\
+pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps={fps}",
+        w = w,
+        h = h,
+        fps = fps
+    );
+
+    let output = ffmpeg_cmd()
+        .arg("-i")
+        .arg(input)
+        // Accurate (output-side) seek so cut points match the chosen timestamps.
+        .args(["-ss", &format!("{}", start), "-t", &format!("{}", duration)])
+        .args([
+            "-vf", &vf,
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-crf", "20",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac",
+            "-ar", "48000",
+            "-ac", "2",
+            "-movflags", "+faststart",
+            "-y",
+        ])
+        .arg(out_path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .map_err(|e| format!("Failed to run ffmpeg: {}", e))?;
+
+    if output.status.success() && out_path.exists() {
+        Ok(())
+    } else {
+        Err(format!(
+            "ffmpeg failed to extract clip from {:?}: {}",
+            input,
+            stderr_tail(&output.stderr)
+        ))
+    }
+}
+
+/// Concatenate already-normalized segment files into `out_path` using the
+/// concat demuxer with stream copy. `segments` must share identical codecs and
+/// parameters (guaranteed when produced by `extract_clip_segment`).
+pub fn concat_clips(segments: &[PathBuf], out_path: &Path) -> Result<(), String> {
+    if segments.is_empty() {
+        return Err("No segments to concatenate".to_string());
+    }
+    if let Some(parent) = out_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    // The concat demuxer reads a list file. Use forward slashes so the paths
+    // parse identically on Windows and Unix.
+    let list_path = out_path.with_extension("concat.txt");
+    let mut list = String::new();
+    for seg in segments {
+        let p = seg.to_string_lossy().replace('\\', "/");
+        list.push_str(&format!("file '{}'\n", p));
+    }
+    std::fs::write(&list_path, list).map_err(|e| format!("Failed to write concat list: {}", e))?;
+
+    let output = ffmpeg_cmd()
+        .args(["-f", "concat", "-safe", "0", "-i"])
+        .arg(&list_path)
+        .args(["-c", "copy", "-movflags", "+faststart", "-y"])
+        .arg(out_path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .map_err(|e| format!("Failed to run ffmpeg: {}", e))?;
+
+    let _ = std::fs::remove_file(&list_path);
+
+    if output.status.success() && out_path.exists() {
+        Ok(())
+    } else {
+        Err(format!(
+            "ffmpeg failed to concatenate clips: {}",
+            stderr_tail(&output.stderr)
+        ))
+    }
+}
+
+/// Return the last ~600 chars of captured stderr, for surfacing ffmpeg errors.
+fn stderr_tail(stderr: &[u8]) -> String {
+    let s = String::from_utf8_lossy(stderr);
+    let trimmed = s.trim();
+    let start = trimmed.len().saturating_sub(600);
+    trimmed[start..].to_string()
+}

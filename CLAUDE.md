@@ -71,9 +71,9 @@ diesel migration revert
 Layered architecture: **Routes → Services → Models/Schema**
 
 - **`lib.rs`**: Public `run(BackendPaths) -> async` and `run_blocking(BackendPaths)` entry points. `main.rs` is a thin wrapper that uses CWD-relative `./data`; the Tauri shell calls `run_blocking` with the OS-specific app-data dir.
-- **Routes** (`routes/`): Actix-web handlers — `videos.rs`, `scan.rs`, `tags.rs`, `productions.rs`, `stream.rs`, `config_routes.rs`. All mounted under `/api`.
-- **Services** (`services/`): Business logic — `scanner.rs` (background directory scanning), `ffmpeg_service.rs` (metadata/thumbnails, with injectable `FfmpegPaths` via `set_ffmpeg_paths()`), `video_service.rs`, `search_service.rs`, `production_service.rs`.
-- **Models** (`models/`): Diesel ORM — `video.rs`, `tag.rs`, `production.rs`.
+- **Routes** (`routes/`): Actix-web handlers — `videos.rs`, `scan.rs`, `tags.rs`, `productions.rs`, `stream.rs`, `config_routes.rs`, `ai.rs` (AI settings + per-video copy generation), `edit.rs` (the Edit & Create Video pipeline). All mounted under `/api`.
+- **Services** (`services/`): Business logic — `scanner.rs` (background directory scanning), `ffmpeg_service.rs` (metadata/thumbnails/clip extraction + concat, with injectable `FfmpegPaths` via `set_ffmpeg_paths()`), `video_service.rs`, `search_service.rs`, `production_service.rs`, `ai_service.rs` (transcription incl. ElevenLabs/OpenAI/Gemini + LLM completion), `edit_service.rs` (background edit pipeline orchestration, in-memory `EditJobMap`).
+- **Models** (`models/`): Diesel ORM — `video.rs`, `tag.rs`, `production.rs`, `ai.rs`, `edit.rs`.
 - **Schema** (`schema.rs`): Diesel auto-generated schema from migrations.
 - **Config** (`config.rs`): `ConfigManager::new(app_data_dir)` — all default paths (database, thumbnails, config.json) are rooted at the provided app-data dir.
 - **DB** (`db.rs`): Connection pool setup.
@@ -81,7 +81,7 @@ Layered architecture: **Routes → Services → Models/Schema**
 ### Frontend (frontend/src/)
 
 - **App Router** (`app/`): Pages — main grid (`page.tsx`), setup wizard (`setup/`), settings (`settings/`).
-- **Components** (`components/`): VideoGrid, VideoCard, VideoModal (player + metadata editor), FilterPanel, Scanner (progress polling), ProductionManager, BulkActions.
+- **Components** (`components/`): VideoGrid, VideoCard, VideoModal (player + metadata editor + AI content panel), FilterPanel, Scanner (progress polling), ProductionManager, VideoEditPipeline (the Edit & Create Video modal), BulkActions.
 - **API Client** (`lib/api.ts`): Centralized typed fetch functions for all backend endpoints.
 - **Types** (`lib/types.ts`): Shared TypeScript interfaces matching backend schemas.
 
@@ -94,11 +94,20 @@ Next.js rewrites `/api/*` requests to `http://localhost:8000/api/*` (configured 
 3. Progress tracked in-memory — not persistent across restarts
 4. Frontend polls `/api/scan/status/{scanId}` every 1 second via the Scanner component
 
+### Key Data Flow: Edit & Create Video pipeline
+1. User adds raw takes to a production, then POSTs a script (+ optional instructions) to `/api/productions/{id}/edit`
+2. `edit_service::start_edit` loads the production's videos, creates a job id in the in-memory `EditJobMap`, and spawns a dedicated OS thread (with its own current-thread Tokio runtime for the async HTTP calls)
+3. The thread runs the stages: extract audio + transcribe each take with word-level timestamps (`ai_service::transcribe_timed`) → build the planning prompt and call the LLM (`ai_service::complete`) → parse/validate the returned EDL against the real takes (clamp ranges to durations) → write the EDL JSON to `edits/production-<id>/` → extract a normalized segment per clip and concat with FFmpeg into the final `.mp4`
+4. The result (EDL + output path) is persisted to the `production_edits` table; the frontend polls `/api/edit/status/{job_id}` (~1.5s) via the VideoEditPipeline modal, and `/api/productions/{id}/edit` returns the latest persisted result on reopen
+5. Transcription word timestamps come from ElevenLabs (Scribe) or OpenAI (Whisper); Gemini returns plain text only (no fine cut points). Keys/models/prompts live in `AiSettings` (config.json), set via Settings → AI / LLM
+
 ### Database Schema
 SQLite at `backend-rust/data/database.db`. Key relationships:
 - **Video ↔ Metadata**: 1:1 (cascade delete)
 - **Video ↔ Tag**: Many-to-many via `video_tags` junction table
 - **Video ↔ Production**: Many-to-many via `video_productions` junction table
+- **Video ↔ AiGeneration**: 1:1 (`ai_generations`, cascade delete) — saved transcript + social copy
+- **Production ↔ ProductionEdit**: 1:many (`production_edits`, cascade delete) — persisted edit pipeline runs (EDL JSON + final video path)
 
 ### Video Streaming
 `routes/stream.rs` supports HTTP range requests (206 Partial Content) for seeking — streams file chunks without loading entire video into memory.

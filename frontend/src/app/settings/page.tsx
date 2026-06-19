@@ -28,7 +28,7 @@ export default function SettingsPage() {
   const [showAi] = useState(isTauri());
   const [aiSettings, setAiSettings] = useState<AiSettings | null>(null);
   const [aiForm, setAiForm] = useState<AiSettingsUpdate>({});
-  const [aiKeys, setAiKeys] = useState({ gemini: '', openai: '', anthropic: '' });
+  const [aiKeys, setAiKeys] = useState({ gemini: '', openai: '', anthropic: '', elevenlabs: '' });
   const [isSavingAi, setIsSavingAi] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiSuccess, setAiSuccess] = useState<string | null>(null);
@@ -59,6 +59,7 @@ export default function SettingsPage() {
           transcription_provider: ai.transcription_provider,
           transcription_model: ai.transcription_model,
           system_prompt: ai.system_prompt,
+          edit_prompt: ai.edit_prompt,
         });
       } catch {
         // AI settings are optional; ignore load failures.
@@ -76,12 +77,13 @@ export default function SettingsPage() {
     if (aiKeys.gemini.trim()) payload.gemini_api_key = aiKeys.gemini.trim();
     if (aiKeys.openai.trim()) payload.openai_api_key = aiKeys.openai.trim();
     if (aiKeys.anthropic.trim()) payload.anthropic_api_key = aiKeys.anthropic.trim();
+    if (aiKeys.elevenlabs.trim()) payload.elevenlabs_api_key = aiKeys.elevenlabs.trim();
 
     try {
       await saveAiSettings(payload);
       setAiSuccess('AI settings saved!');
       setTimeout(() => setAiSuccess(null), 3000);
-      setAiKeys({ gemini: '', openai: '', anthropic: '' });
+      setAiKeys({ gemini: '', openai: '', anthropic: '', elevenlabs: '' });
       // Refresh key-presence indicators.
       const ai = await getAiSettings();
       setAiSettings(ai);
@@ -324,8 +326,9 @@ export default function SettingsPage() {
                     }
                     className="input"
                   >
-                    <option value="gemini">Google Gemini</option>
+                    <option value="elevenlabs">ElevenLabs (Scribe)</option>
                     <option value="openai">OpenAI (Whisper)</option>
+                    <option value="gemini">Google Gemini</option>
                   </select>
                 </div>
                 <div>
@@ -339,18 +342,20 @@ export default function SettingsPage() {
                       setAiForm({ ...aiForm, transcription_model: e.target.value })
                     }
                     className="input"
-                    placeholder="e.g. gemini-2.0-flash, whisper-1"
+                    placeholder="e.g. scribe_v1, whisper-1, gemini-2.0-flash"
                   />
                 </div>
               </div>
 
               <p className="text-xs text-gray-500 dark:text-gray-400 mt-3">
-                Note: Anthropic Claude does not transcribe audio — choose Gemini or OpenAI as
-                the transcription provider.
+                ElevenLabs (Scribe) and OpenAI (Whisper) return word-level timestamps, which the
+                video-edit pipeline uses to choose precise cut points. Anthropic Claude does not
+                transcribe audio.
               </p>
 
               <div className="mt-5 space-y-4">
                 {([
+                  { key: 'elevenlabs', label: 'ElevenLabs API key', set: aiSettings?.elevenlabs_api_key_set },
                   { key: 'gemini', label: 'Gemini API key', set: aiSettings?.gemini_api_key_set },
                   { key: 'openai', label: 'OpenAI API key', set: aiSettings?.openai_api_key_set },
                   { key: 'anthropic', label: 'Anthropic API key', set: aiSettings?.anthropic_api_key_set },
@@ -412,6 +417,49 @@ export default function SettingsPage() {
                 <textarea
                   value={aiForm.system_prompt ?? ''}
                   onChange={(e) => setAiForm({ ...aiForm, system_prompt: e.target.value })}
+                  rows={14}
+                  spellCheck={false}
+                  className="input font-mono text-xs leading-relaxed"
+                  placeholder="Loading prompt…"
+                />
+              </div>
+
+              {/* Editable video-edit pipeline prompt */}
+              <div className="mt-6">
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Video-edit pipeline prompt
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      aiSettings &&
+                      setAiForm({ ...aiForm, edit_prompt: aiSettings.default_edit_prompt })
+                    }
+                    disabled={
+                      !aiSettings || aiForm.edit_prompt === aiSettings.default_edit_prompt
+                    }
+                    className="text-xs text-primary-600 dark:text-primary-400 hover:underline disabled:opacity-40 disabled:no-underline"
+                  >
+                    Reset to default
+                  </button>
+                </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+                  Drives the “Edit &amp; Create Video” pipeline that stitches the best raw takes
+                  into a final clip. Use{' '}
+                  <code className="px-1 bg-gray-100 dark:bg-gray-700 rounded">{'{script}'}</code> and{' '}
+                  <code className="px-1 bg-gray-100 dark:bg-gray-700 rounded">{'{transcripts}'}</code>{' '}
+                  where the script and the per-take timestamped transcripts should be inserted
+                  (each is appended automatically if removed). The model must return JSON with a{' '}
+                  <code className="px-1 bg-gray-100 dark:bg-gray-700 rounded">scenes</code> array of{' '}
+                  <code className="px-1 bg-gray-100 dark:bg-gray-700 rounded">clips</code>, each with{' '}
+                  <code className="px-1 bg-gray-100 dark:bg-gray-700 rounded">video_id</code>,{' '}
+                  <code className="px-1 bg-gray-100 dark:bg-gray-700 rounded">start</code>, and{' '}
+                  <code className="px-1 bg-gray-100 dark:bg-gray-700 rounded">end</code> (seconds).
+                </p>
+                <textarea
+                  value={aiForm.edit_prompt ?? ''}
+                  onChange={(e) => setAiForm({ ...aiForm, edit_prompt: e.target.value })}
                   rows={14}
                   spellCheck={false}
                   className="input font-mono text-xs leading-relaxed"
