@@ -1,30 +1,32 @@
-<div align="center">
 
-<img src="images/Logo.png" alt="Video Log Manager" width="500" />
+
+
 
 A modern, full-stack video indexing and management application for organizing and browsing large video collections. Built for runners, content creators, and anyone managing thousands of videos locally.
 
 Created to help manage my own videos for my Youtube Channel [Pacing Josh](https://www.youtube.com/@pacingjosh)
 
-![Rust](https://img.shields.io/badge/Rust-1.75+-orange.svg)
-![Actix-web](https://img.shields.io/badge/Actix--web-4.9-red.svg)
-![Next.js](https://img.shields.io/badge/Next.js-14.2.0-black.svg)
-![TypeScript](https://img.shields.io/badge/TypeScript-5.3.3-blue.svg)
-![License](https://img.shields.io/badge/License-MIT-green.svg)
+Rust
+Actix-web
+Next.js
+TypeScript
+License
 
-</div>
 
-![Video Log Manager](images/main-screen.png)
+
+Video Log Manager
 
 ## Features
 
 ### Video Management
+
 - **Recursive Directory Scanning** - Automatically index videos from any directory structure
 - **Thumbnail Generation** - Auto-generate multiple thumbnails per video for quick preview
 - **Video Streaming** - Built-in video player with seeking support
 - **Metadata Extraction** - Extract duration, resolution, FPS, codec, and more using FFmpeg
 
 ### Organization & Search
+
 - **Full-Text Search** - Search across filenames, locations, and notes
 - **Tagging System** - Multi-tag support with tag management
 - **Categories** - Organize videos into categories
@@ -32,12 +34,14 @@ Created to help manage my own videos for my Youtube Channel [Pacing Josh](https:
 - **Notes** - Add detailed notes to each video
 
 ### Productions
+
 - **Production Tracking** - Create and manage productions (YouTube, TikTok, Instagram, etc.)
 - **Many-to-Many Linking** - Link any video to multiple productions and vice versa
 - **Platform & Status** - Track platform, publish link, and draft/published status per production
 - **Production Filtering** - Filter the video grid by production to see which clips belong where
 
 ### Advanced Features
+
 - **Metadata Editing** - Edit all metadata inline
 - **Bulk Operations** - Update categories, tags, and production assignments across multiple videos at once
 - **Real-Time Progress** - Live scanning progress with ETA and per-file status
@@ -48,15 +52,18 @@ Created to help manage my own videos for my Youtube Channel [Pacing Josh](https:
 ## Architecture
 
 **Desktop shell:**
+
 - [Tauri 2.0](https://v2.tauri.app/) (`src-tauri/`) — ships the app as a single native installer per OS. Embeds the Rust backend on a dedicated thread and loads the static-exported frontend inside a WebView.
 
 **Backend:**
+
 - Actix-web (Rust) — REST API, compiled as both a standalone binary and a library (embedded into Tauri)
 - SQLite — Database
 - Diesel — ORM
 - FFmpeg — Video processing (bundled as a Tauri sidecar in release builds)
 
 **Frontend:**
+
 - Next.js 14 (App Router, fully client-side, static-exported)
 - React 18
 - TypeScript
@@ -68,16 +75,17 @@ Created to help manage my own videos for my Youtube Channel [Pacing Josh](https:
 
 ### Required Software
 
-| Software | Minimum Version | Installation |
-|----------|----------------|--------------|
-| Rust | 1.75+ | [rustup.rs](https://rustup.rs/) |
-| Node.js | 18.0+ | [nodejs.org](https://nodejs.org/) |
-| FFmpeg | Latest | See OS-specific instructions below |
+
+| Software | Minimum Version | Installation                       |
+| -------- | --------------- | ---------------------------------- |
+| Rust     | 1.75+           | [rustup.rs](https://rustup.rs/)    |
+| Node.js  | 18.0+           | [nodejs.org](https://nodejs.org/)  |
+| FFmpeg   | Latest          | See OS-specific instructions below |
+
 
 ### Installing FFmpeg
 
-<details>
-<summary><b>macOS</b></summary>
+**macOS**
 
 ```bash
 # Using Homebrew
@@ -86,10 +94,10 @@ brew install ffmpeg
 # Verify installation
 ffmpeg -version
 ```
-</details>
 
-<details>
-<summary><b>Ubuntu/Debian Linux</b></summary>
+
+
+**Ubuntu/Debian Linux**
 
 ```bash
 # Install FFmpeg
@@ -99,19 +107,21 @@ sudo apt install ffmpeg
 # Verify installation
 ffmpeg -version
 ```
-</details>
 
-<details>
-<summary><b>Windows</b></summary>
+
+
+**Windows**
 
 1. Download FFmpeg from [ffmpeg.org](https://ffmpeg.org/download.html#build-windows)
 2. Extract to `C:\ffmpeg`
 3. Add `C:\ffmpeg\bin` to your system PATH
 4. Open a new Command Prompt and verify:
+
 ```cmd
 ffmpeg -version
 ```
-</details>
+
+
 
 ### System Requirements
 
@@ -196,7 +206,7 @@ npm run dev
 
 ### 4. First-Time Setup
 
-1. Open **http://localhost:3000** in your browser
+1. Open **[http://localhost:3000](http://localhost:3000)** in your browser
 2. You'll be redirected to the setup page
 3. Click **"Browse..."** to select your video directory (or type the path)
 4. Click **"Start Scanning"**
@@ -208,21 +218,25 @@ npm run dev
 ### Scanning Videos
 
 **Initial Scan:**
-- Navigate to http://localhost:3000
+
+- Navigate to [http://localhost:3000](http://localhost:3000)
 - Enter your video directory path
 - The application will recursively scan all subdirectories
 - Supported formats: .mp4, .mov, .avi, .mkv, .webm, .flv, .wmv
 
 **Rescanning:**
+
 - Click the **"Rescan"** button in the header to pick up new or changed files
 - Progress is shown in real time with ETA
 
 ### Searching and Filtering
 
 **Search:**
+
 - Use the search bar to find videos by filename, location, or notes
 
 **Filters:**
+
 - **Category** - Filter by video category
 - **Production** - Filter by production to see which clips belong to a specific project
 - **Tags** - Select multiple tags
@@ -239,12 +253,14 @@ npm run dev
 ### Editing Metadata
 
 **Single Video:**
+
 1. Click on any video card
 2. Click **"Edit"** in the modal
 3. Update category, location, tags, notes, or linked productions
 4. Click **"Save"**
 
 **Bulk Edit:**
+
 1. Select multiple videos using the checkboxes
 2. Click **"Bulk Edit"** in the bottom toolbar
 3. Set category, add/remove tags, add/remove production assignments
@@ -260,27 +276,33 @@ npm run dev
 ## Screenshots
 
 ### Main Screen
-![Main Screen](images/main-screen.png)
+
+Main Screen
 *Browse your video collection with thumbnails, tags, and production badges*
 
 ### Video Grid
-![Video Grid](images/video-grid.png)
+
+Video Grid
 *Video cards show duration, resolution, file size, tags, and linked productions*
 
 ### Video Player Modal
-![Video Player](images/video-modal.png)
+
+Video Player
 *Watch videos and edit metadata in a sleek modal interface*
 
 ### Production Manager
-![Productions](images/production.png)
+
+Productions
 *Create and manage productions with platform, link, and publish status*
 
 ### Scanning Progress
-![Scanning](images/scanning.png)
+
+Scanning
 *Real-time scanning progress with ETA and per-file status*
 
 ### Settings Page
-![Settings](images/settings.png)
+
+Settings
 *Configure video directory and thumbnail preferences*
 
 ## Configuration
@@ -336,23 +358,29 @@ PUT    /api/config                  - Update configuration
 ### Tables
 
 **videos**
+
 - id, file_path, filename, file_hash
 - duration, file_size, resolution, fps, codec
 - created_date, indexed_date, thumbnail_count
 
 **metadata**
+
 - id, video_id, category, location, notes
 
 **tags**
+
 - id, name
 
 **video_tags**
+
 - video_id, tag_id (junction table)
 
 **productions**
+
 - id, title, platform, link, is_published
 
 **video_productions**
+
 - video_id, production_id (junction table)
 
 ## Development
@@ -397,17 +425,21 @@ pacingjosh-video-manager/
 ## Troubleshooting
 
 ### FFmpeg Not Found
+
 **Error:** `FFmpeg is not installed or not in PATH`
 
 **Solution:**
+
 - Install FFmpeg (see Prerequisites)
 - Verify installation: `ffmpeg -version`
 - Add FFmpeg to your PATH
 
 ### Port Already in Use
+
 **Error:** `Address already in use`
 
 **Solution:**
+
 ```bash
 # Find and kill process
 lsof -ti:8000 | xargs kill  # Backend
@@ -419,26 +451,32 @@ lsof -ti:3000 | xargs kill  # Frontend
 ```
 
 ### Database Locked
+
 **Error:** `database is locked`
 
 **Solution:**
+
 - Close any SQLite browser tools
 - Restart the backend server
 - Check file permissions on `data/database.db`
 
 ### Videos Not Showing
+
 **Issue:** Scan completed but no videos appear
 
 **Solution:**
+
 1. Check if videos are in supported formats
 2. Verify file permissions
 3. Check backend logs for errors
 4. Try rescanning via the Rescan button
 
 ### Thumbnails Not Loading
+
 **Issue:** Video cards show placeholder icon
 
 **Solution:**
+
 1. The `data/thumbnails/` directory is created automatically on startup
 2. Verify FFmpeg can read your video files
 3. Check browser console for 404 errors
@@ -448,12 +486,12 @@ lsof -ti:3000 | xargs kill  # Frontend
 
 Future enhancements planned:
 
-- [ ] Video analytics and statistics dashboard
-- [ ] Export/import functionality
-- [ ] Mobile app companion
-- [ ] Cloud storage integration
-- [ ] Advanced AI features (face detection, transcription)
-- [ ] Collaborative features and sharing
+- Video analytics and statistics dashboard
+- Export/import functionality
+- Mobile app companion
+- Cloud storage integration
+- Advanced AI features (face detection, transcription)
+- Collaborative features and sharing
 
 ## Contributing
 
@@ -485,10 +523,9 @@ Project Link: [https://github.com/joaoh82/pacingjosh-video-manager](https://gith
 
 ---
 
-<div align="center">
+
 
 **Made for runners who love tracking their journey**
 
 *If you find this project helpful, please consider giving it a star!*
 
-</div>
