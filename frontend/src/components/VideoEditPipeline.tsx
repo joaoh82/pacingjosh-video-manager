@@ -7,9 +7,21 @@ import {
   getEditStatus,
   getProductionEdits,
   revealEditOutput,
+  revealEditFile,
   browseFolder,
   browseFile,
 } from '@/lib/api';
+
+/** Derive the chosen output root (the parent of the per-production folder) from
+ * a previous run's output path, e.g. `D:\Videos\My Prod\clip.mp4` → `D:/Videos`. */
+function rootFromOutputPath(p?: string | null): string {
+  if (!p) return '';
+  const parts = p.replace(/\\/g, '/').split('/').filter(Boolean);
+  if (parts.length < 2) return '';
+  parts.pop(); // filename
+  parts.pop(); // per-production folder
+  return parts.join('/');
+}
 import { format } from 'date-fns';
 
 interface VideoEditPipelineProps {
@@ -78,6 +90,8 @@ export default function VideoEditPipeline({
       if (list.length > 0) {
         setScript((s) => s || list[0].script || '');
         setInstructions((i) => i || list[0].instructions || '');
+        const root = rootFromOutputPath(list[0].output_path);
+        if (root) setOutputDir((d) => d || root);
       }
     } catch {
       setHistory([]);
@@ -148,6 +162,10 @@ export default function VideoEditPipeline({
       setError('Paste the script for this video first.');
       return;
     }
+    if (!outputDir.trim()) {
+      setError('Choose an output folder for the final video.');
+      return;
+    }
     setStarting(true);
     setError(null);
     setStatus(null);
@@ -187,16 +205,7 @@ export default function VideoEditPipeline({
     }
   };
 
-  const handleReveal = async () => {
-    try {
-      await revealEditOutput(production.id);
-    } catch {
-      /* ignore */
-    }
-  };
-
   const selected = history.find((h) => h.id === selectedId) || null;
-  const latestId = history[0]?.id ?? null;
   const pct =
     status && status.total > 0
       ? Math.min(100, Math.round((status.processed / status.total) * 100))
@@ -322,6 +331,16 @@ export default function VideoEditPipeline({
                       </p>
                     </div>
                   )}
+                  {status.status === 'completed' && status.output_path && (
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <button onClick={() => revealEditOutput(production.id)} className="btn btn-primary text-sm">
+                        📂 Open the final video
+                      </button>
+                      <span className="text-xs text-gray-500 dark:text-gray-400 break-all">
+                        {status.output_path}
+                      </span>
+                    </div>
+                  )}
                   {status.logs && status.logs.length > 0 && (
                     <details open={status.status === 'in_progress'} className="text-xs">
                       <summary className="cursor-pointer text-gray-500 dark:text-gray-400">Activity log</summary>
@@ -382,7 +401,7 @@ export default function VideoEditPipeline({
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                        Output folder
+                        Output folder <span className="text-red-500">*</span>
                       </label>
                       <div className="flex gap-2">
                         <input
@@ -391,7 +410,7 @@ export default function VideoEditPipeline({
                           onChange={(e) => setOutputDir(e.target.value)}
                           disabled={running}
                           className="input flex-1 text-sm"
-                          placeholder="Default: app data folder"
+                          placeholder="Where to save the video"
                         />
                         <button
                           type="button"
@@ -417,6 +436,11 @@ export default function VideoEditPipeline({
                       />
                     </div>
                   </div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 -mt-2">
+                    A subfolder named “{production.title}” is created inside this folder; the final
+                    video and its <code>.json</code> edit decision list are written there. Nothing is
+                    stored in the app&apos;s data directory.
+                  </p>
 
                   {/* Captions */}
                   <label className="flex items-center gap-2 cursor-pointer">
@@ -493,7 +517,7 @@ export default function VideoEditPipeline({
                 </div>
               ) : (
                 /* ---------- History detail ---------- */
-                selected && <EditDetail edit={selected} isLatest={selected.id === latestId} onReveal={handleReveal} />
+                selected && <EditDetail edit={selected} />
               )}
             </main>
           </div>
@@ -505,12 +529,8 @@ export default function VideoEditPipeline({
 
 function EditDetail({
   edit,
-  isLatest,
-  onReveal,
 }: {
   edit: ProductionEdit;
-  isLatest: boolean;
-  onReveal: () => void;
 }) {
   const [scriptOpen, setScriptOpen] = useState(false);
   const clips = edit.edl?.clips ?? [];
@@ -528,8 +548,11 @@ function EditDetail({
             {edit.edl?.music ? ` · music: ${edit.edl.music}` : ''}
           </p>
         </div>
-        {edit.status === 'completed' && edit.output_path && isLatest && (
-          <button onClick={onReveal} className="btn btn-secondary text-xs whitespace-nowrap">
+        {edit.status === 'completed' && edit.output_path && (
+          <button
+            onClick={() => revealEditFile(edit.id).catch(() => {})}
+            className="btn btn-secondary text-xs whitespace-nowrap"
+          >
             📁 Reveal final video
           </button>
         )}
@@ -542,12 +565,7 @@ function EditDetail({
       )}
 
       {edit.output_path && (
-        <p className="text-xs text-gray-500 dark:text-gray-400 break-all">
-          Output: {edit.output_path}
-          {!isLatest && edit.status === 'completed' && (
-            <span className="italic"> (open this folder manually — “Reveal” opens the most recent run)</span>
-          )}
-        </p>
+        <p className="text-xs text-gray-500 dark:text-gray-400 break-all">Output: {edit.output_path}</p>
       )}
 
       {/* Script (collapsible) */}

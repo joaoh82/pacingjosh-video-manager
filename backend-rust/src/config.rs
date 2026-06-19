@@ -354,19 +354,6 @@ impl ConfigManager {
         path
     }
 
-    /// Base directory for video-edit pipeline output (EDL JSON + final clips),
-    /// rooted at the app-data dir alongside the database and thumbnails.
-    pub fn get_edits_directory(&self) -> PathBuf {
-        let base = self
-            .config_path
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("."));
-        let path = base.join("edits");
-        std::fs::create_dir_all(&path).ok();
-        path
-    }
-
     #[allow(dead_code)]
     pub fn get_database_path(&self) -> PathBuf {
         let settings = self.settings.read().unwrap();

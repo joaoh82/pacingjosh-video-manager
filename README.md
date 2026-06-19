@@ -47,7 +47,7 @@ Video Log Manager
 - **Edit & Create Video Pipeline** - Add raw takes to a production, paste your script, and the app transcribes every take (with word-level timestamps), asks an LLM to assemble the best cut (newest clean takes, re-shoots in timeline order, warm-up "Hey …" intros trimmed), writes an **edit decision list** as JSON, then stitches the final clip with FFmpeg — all tracked with live progress
 - **Burned-in Captions** - Optionally burn the spoken words onto the final video, re-timed per clip from the transcript
 - **Background Music** - Optionally pick a music track to loop under the speech at an adjustable volume
-- **Choose Output Location** - Pick the output folder and filename for the final video (defaults to the production title)
+- **Choose Output Location** - Pick the output folder; a per-production subfolder is created inside it holding the final video and its EDL JSON (nothing is written to the app's data directory)
 - **Edit History** - Every run is saved per production; reopen the modal to browse past runs, view their script, edit decision list, and activity log, or reveal the final video
 - **Editable Prompts** - Both the copy-generation prompt and the edit-planning prompt are editable in Settings
 - **Local Keys** - API keys are stored locally in `config.json` and never returned by the API after saving
@@ -270,8 +270,8 @@ npm run dev
 1. Create a production and add all the raw takes of your video to it (drag them in via bulk edit or the video modal).
 2. Open **Productions**, then click the **🎬 clapperboard** button on that production.
 3. Paste your **script** (Markdown is fine — scene breaks help the editor align takes) and, optionally, extra instructions (e.g. the warm-up phrase to cut, or "I re-shot scene 1 at the end").
-4. Optionally set:
-   - **Output folder + filename** for the final video (defaults to the app-data folder / the production title),
+4. Set:
+   - **Output folder** (required) — a subfolder named after the production is created inside it, holding the final video and its EDL JSON. Optionally set the **filename**.
    - **Burn in captions** (on by default) to overlay the spoken words,
    - **Background music** — browse for a track and set its volume; it's looped under the speech.
 5. Click **Run pipeline**. The app will, in order:
@@ -284,8 +284,9 @@ npm run dev
 
 Every run is saved. Reopen the modal any time to browse the **history** for that production —
 select a past run to see its script, edit decision list, and activity log, or click **＋ New edit**
-to start another. The EDL JSON and a `latest.json` are always written under the app-data directory
-at `edits/production-<id>/`; the final `.mp4` goes to your chosen folder (or there by default).
+to start another. Output files live entirely under your chosen folder, in a per-production
+subfolder: `<output folder>/<production title>/<name>.mp4` and `<name>.json` (the edit decision
+list). Nothing is written to the app's data directory.
 
 ### Editing Metadata
 
@@ -400,14 +401,16 @@ POST   /api/productions/{id}/edit          - Start the edit pipeline (returns jo
 GET    /api/edit/status/{job_id}           - Poll live pipeline progress
 GET    /api/productions/{id}/edit          - Latest persisted edit result (EDL + output)
 GET    /api/productions/{id}/edits         - Full edit history (newest first)
-POST   /api/productions/{id}/edit/reveal   - Reveal the final video in the file browser
+POST   /api/productions/{id}/edit/reveal   - Reveal the latest final video in the file browser
+POST   /api/edits/{edit_id}/reveal         - Reveal a specific run's final video
 GET    /api/browse-folder                  - OS folder picker (output location)
 GET    /api/browse-file                    - OS file picker (background music)
 ```
 
-The `POST /api/productions/{id}/edit` body accepts: `script` (required), and optional
-`instructions`, `output_dir`, `output_name`, `captions` (default `true`), `music_path`,
-and `music_volume` (0.0–1.0, default `0.2`).
+The `POST /api/productions/{id}/edit` body accepts: `script` and `output_dir` (both required),
+plus optional `instructions`, `output_name`, `captions` (default `true`), `music_path`, and
+`music_volume` (0.0–1.0, default `0.2`). `POST /api/edits/{edit_id}/reveal` reveals a specific
+run's final video.
 
 ## Database Schema
 

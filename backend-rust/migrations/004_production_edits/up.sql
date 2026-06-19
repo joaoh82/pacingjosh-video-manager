@@ -1,7 +1,7 @@
--- Persisted results of the video-edit pipeline. Each row is one completed (or
--- failed) attempt to assemble a production's raw takes into a final clip. The
--- edit decision list is stored as JSON in `edl_json` and also written to disk
--- at `edl_path`; the stitched video lives at `output_path`.
+-- Persisted results of the video-edit pipeline. Each row is one completed or
+-- failed attempt to assemble a production's raw takes into a final clip. The
+-- edit decision list is stored as JSON in edl_json and also written to disk at
+-- edl_path, alongside the stitched video at output_path.
 CREATE TABLE IF NOT EXISTS production_edits (
     id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     production_id INTEGER NOT NULL REFERENCES productions(id) ON DELETE CASCADE,

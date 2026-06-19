@@ -45,7 +45,6 @@ async fn start_edit(
 ) -> HttpResponse {
     let production_id = path.into_inner();
     let ai = config.get_ai_settings();
-    let edits_dir = config.get_edits_directory();
 
     let opts = EditOptions {
         script: body.script.clone(),
@@ -62,7 +61,6 @@ async fn start_edit(
         opts,
         pool.get_ref().clone(),
         ai,
-        edits_dir,
         edit_map.get_ref().clone(),
     ) {
         Ok(job_id) => HttpResponse::Ok().json(serde_json::json!({
@@ -122,35 +120,55 @@ async fn list_edits(
     HttpResponse::Ok().json(edits)
 }
 
-/// Reveal the latest final video (or the production's edit folder) in the OS
-/// file browser.
+/// Reveal the latest final video for a production in the OS file browser.
 #[post("/productions/{production_id}/edit/reveal")]
 async fn reveal_edit_output(
     pool: web::Data<DbPool>,
-    config: web::Data<ConfigManager>,
     path: web::Path<i32>,
 ) -> HttpResponse {
     let production_id = path.into_inner();
-
-    // Prefer revealing the final video; fall back to the production edit folder.
-    let target: Option<String> = {
+    let output = {
         let mut conn = pool.get().expect("Failed to get DB connection");
-        edit_service::get_latest_edit(&mut conn, production_id)
-            .and_then(|e| e.output_path)
-            .filter(|p| std::path::Path::new(p).exists())
+        edit_service::get_latest_edit(&mut conn, production_id).and_then(|e| e.output_path)
     };
+    reveal_output(output)
+}
 
-    let (reveal_path, select) = match target {
-        Some(p) => (p, true),
-        None => {
-            let dir = config
-                .get_edits_directory()
-                .join(format!("production-{}", production_id));
-            (dir.to_string_lossy().to_string(), false)
+/// Reveal a specific run's final video in the OS file browser.
+#[post("/edits/{edit_id}/reveal")]
+async fn reveal_edit_by_id(
+    pool: web::Data<DbPool>,
+    path: web::Path<i32>,
+) -> HttpResponse {
+    let edit_id = path.into_inner();
+    let output = {
+        let mut conn = pool.get().expect("Failed to get DB connection");
+        edit_service::get_edit_by_id(&mut conn, edit_id).and_then(|e| e.output_path)
+    };
+    reveal_output(output)
+}
+
+/// Reveal a recorded output path: highlight the file if it still exists,
+/// otherwise open its containing folder.
+fn reveal_output(output: Option<String>) -> HttpResponse {
+    let path = match output {
+        Some(p) if !p.is_empty() => p,
+        _ => {
+            return HttpResponse::NotFound()
+                .json(serde_json::json!({ "detail": "No output file recorded for this run." }))
         }
     };
+    let pb = std::path::Path::new(&path);
+    let (target, select) = if pb.exists() {
+        (path.clone(), true)
+    } else if let Some(parent) = pb.parent().filter(|d| d.exists()) {
+        (parent.to_string_lossy().to_string(), false)
+    } else {
+        return HttpResponse::NotFound()
+            .json(serde_json::json!({ "detail": "The output file no longer exists on disk." }));
+    };
 
-    match reveal_in_explorer(&reveal_path, select) {
+    match reveal_in_explorer(&target, select) {
         Ok(()) => HttpResponse::Ok().json(serde_json::json!({ "message": "Opened" })),
         Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({
             "detail": format!("Failed to open: {}", e),
@@ -208,5 +226,6 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         .service(edit_status)
         .service(list_edits)
         .service(get_latest_edit)
-        .service(reveal_edit_output);
+        .service(reveal_edit_output)
+        .service(reveal_edit_by_id);
 }

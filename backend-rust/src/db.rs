@@ -52,7 +52,19 @@ fn run_migrations(conn: &mut SqliteConnection) {
     ];
 
     for up_sql in migrations {
-        for statement in up_sql.split(';') {
+        // Strip `--` line comments BEFORE splitting on ';'. A semicolon inside a
+        // comment would otherwise chop a statement in half and silently break the
+        // migration (the leftover comment text becomes invalid SQL).
+        let cleaned: String = up_sql
+            .lines()
+            .map(|line| match line.find("--") {
+                Some(idx) => &line[..idx],
+                None => line,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for statement in cleaned.split(';') {
             let stmt = statement.trim();
             if !stmt.is_empty() {
                 // Ignore errors from "already exists" on re-runs

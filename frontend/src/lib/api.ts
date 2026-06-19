@@ -386,7 +386,12 @@ export async function getProductionEdits(
   return fetchApi<ProductionEdit[]>(`/api/productions/${productionId}/edits`);
 }
 
-/** Reveal the latest final video (or the edit folder) in the OS file browser. */
+/** Reveal the latest final video for a production in the OS file browser. */
 export async function revealEditOutput(productionId: number): Promise<void> {
   await fetchApi(`/api/productions/${productionId}/edit/reveal`, { method: 'POST' });
+}
+
+/** Reveal a specific run's final video in the OS file browser. */
+export async function revealEditFile(editId: number): Promise<void> {
+  await fetchApi(`/api/edits/${editId}/reveal`, { method: 'POST' });
 }

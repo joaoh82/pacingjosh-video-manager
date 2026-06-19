@@ -177,7 +177,6 @@ pub fn start_edit(
     opts: EditOptions,
     pool: DbPool,
     ai: AiSettings,
-    edits_dir: PathBuf,
     edit_map: EditJobMap,
 ) -> Result<String, String> {
     let mut conn = pool.get().map_err(|e| format!("Database connection failed: {}", e))?;
@@ -191,6 +190,9 @@ pub fn start_edit(
     }
     if opts.script.trim().is_empty() {
         return Err("A script is required to plan the edit.".to_string());
+    }
+    if opts.output_dir.as_deref().map(str::trim).unwrap_or("").is_empty() {
+        return Err("Choose an output folder for the final video.".to_string());
     }
     if let Some(m) = opts.music_path.as_deref().filter(|s| !s.is_empty()) {
         if !std::path::Path::new(m).exists() {
@@ -230,7 +232,6 @@ pub fn start_edit(
                 takes,
                 pool,
                 ai,
-                edits_dir,
                 edit_map,
             );
         })
@@ -248,7 +249,6 @@ fn run_edit(
     takes: Vec<TakeMeta>,
     pool: DbPool,
     ai: AiSettings,
-    edits_dir: PathBuf,
     edit_map: EditJobMap,
 ) {
     let result = run_edit_inner(
@@ -258,7 +258,6 @@ fn run_edit(
         &opts,
         &takes,
         &ai,
-        &edits_dir,
         &edit_map,
     );
 
@@ -267,7 +266,7 @@ fn run_edit(
 
     match result {
         Ok((edl_value, edl_path, output_path)) => {
-            persist_edit(
+            let persisted = persist_edit(
                 &pool,
                 production_id,
                 "completed",
@@ -287,12 +286,15 @@ fn run_edit(
                 p.edl_path = Some(edl_path.to_string_lossy().to_string());
                 p.output_path = Some(output_path.to_string_lossy().to_string());
                 p.end_time = Some(Utc::now().naive_utc());
+                if let Err(e) = &persisted {
+                    push_log(p, &format!("⚠ Could not save this run to history: {}", e));
+                }
                 push_log(p, "Done.");
             });
         }
         Err(e) => {
             error!("[edit {}] failed: {}", job_id, e);
-            persist_edit(
+            let persisted = persist_edit(
                 &pool,
                 production_id,
                 "failed",
@@ -304,6 +306,9 @@ fn run_edit(
                 &logs,
                 &ai,
             );
+            if let Err(pe) = &persisted {
+                warn!("[edit {}] also failed to persist the failure: {}", job_id, pe);
+            }
             update(&edit_map, job_id, |p| {
                 p.status = "failed".to_string();
                 p.stage = "failed".to_string();
@@ -332,13 +337,22 @@ fn run_edit_inner(
     opts: &EditOptions,
     takes: &[TakeMeta],
     ai: &AiSettings,
-    edits_dir: &std::path::Path,
     edit_map: &EditJobMap,
 ) -> Result<(serde_json::Value, PathBuf, PathBuf), String> {
     let script = opts.script.as_str();
     let instructions = opts.instructions.as_deref();
-    let prod_dir = edits_dir.join(format!("production-{}", production_id));
-    std::fs::create_dir_all(&prod_dir).map_err(|e| format!("Failed to create output dir: {}", e))?;
+
+    // Everything for this production lands under <chosen output root>/<production>/.
+    // Nothing is written to the app-data directory.
+    let root = opts
+        .output_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or("Choose an output folder for the final video.")?;
+    let out_dir = std::path::Path::new(root).join(production_folder_name(production_title, production_id));
+    std::fs::create_dir_all(&out_dir)
+        .map_err(|e| format!("Failed to create output folder {}: {}", out_dir.display(), e))?;
 
     // A dedicated current-thread Tokio runtime for the async HTTP work
     // (transcription + LLM). ffmpeg calls below are synchronous.
@@ -396,8 +410,12 @@ fn run_edit_inner(
     }
     log_msg(edit_map, job_id, &format!("Planned {} clip(s) across the timeline.", resolved.len()));
 
-    // Resolve where the final video should be written.
-    let output_path = resolve_output_path(opts, &prod_dir, production_title, job_id)?;
+    // The final video and its EDL JSON share a basename and live side by side in
+    // the production's output folder.
+    let stem = output_stem(opts.output_name.as_deref(), production_title, job_id);
+    let output_path = out_dir.join(format!("{}.mp4", stem));
+    let edl_path = out_dir.join(format!("{}.json", stem));
+
     let music_path = opts
         .music_path
         .as_deref()
@@ -419,11 +437,8 @@ fn run_edit_inner(
         opts.captions,
         music_name.as_deref(),
     );
-    let edl_path = prod_dir.join(format!("edit-{}.json", job_id));
     let pretty = serde_json::to_string_pretty(&edl_value).unwrap_or_else(|_| "{}".to_string());
     std::fs::write(&edl_path, &pretty).map_err(|e| format!("Failed to write EDL JSON: {}", e))?;
-    // Also keep a stable "latest.json" for convenience.
-    let _ = std::fs::write(prod_dir.join("latest.json"), &pretty);
     log_msg(edit_map, job_id, &format!("Wrote edit decision list to {}", edl_path.display()));
 
     // --- Stage 3: stitch the clips with ffmpeg -----------------------------
@@ -446,7 +461,8 @@ fn run_edit_inner(
         p.processed = 0;
     });
 
-    let work_dir = prod_dir.join(format!("work-{}", job_id));
+    // Transient segment workspace inside the output folder; removed on success.
+    let work_dir = out_dir.join(format!(".work-{}", job_id));
     std::fs::create_dir_all(&work_dir).map_err(|e| format!("Failed to create work dir: {}", e))?;
 
     let mut segments: Vec<PathBuf> = Vec::with_capacity(resolved.len());
@@ -521,43 +537,41 @@ fn run_edit_inner(
     Ok((edl_value, edl_path, output_path))
 }
 
-/// Decide where the final video file goes: a user-chosen directory + filename,
-/// or the app-data edit folder with a per-job name.
-fn resolve_output_path(
-    opts: &EditOptions,
-    prod_dir: &std::path::Path,
-    production_title: &str,
-    job_id: &str,
-) -> Result<PathBuf, String> {
-    let dir = opts.output_dir.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    match dir {
-        Some(d) => {
-            let dir = PathBuf::from(d);
-            std::fs::create_dir_all(&dir)
-                .map_err(|e| format!("Failed to create output directory {}: {}", d, e))?;
-            Ok(dir.join(output_filename(opts.output_name.as_deref(), production_title, job_id)))
-        }
-        None => Ok(prod_dir.join(format!("final-{}.mp4", job_id))),
+/// Strip path separators and awkward characters from a single path segment.
+fn sanitize_segment(s: &str) -> String {
+    let cleaned: String = s
+        .chars()
+        .map(|c| if c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.') { c } else { '_' })
+        .collect();
+    cleaned.trim().trim_matches('.').trim().to_string()
+}
+
+/// Per-production subfolder name created inside the chosen output root. Uses the
+/// (unique) production title, falling back to `production-<id>`.
+fn production_folder_name(production_title: &str, production_id: i32) -> String {
+    let s = sanitize_segment(production_title);
+    if s.is_empty() {
+        format!("production-{}", production_id)
+    } else {
+        s
     }
 }
 
-/// Build a safe `.mp4` filename from the requested name (or the production
-/// title), stripping path separators and other awkward characters.
-fn output_filename(requested: Option<&str>, production_title: &str, job_id: &str) -> String {
+/// Basename (no extension) shared by the final video and its EDL JSON. Uses the
+/// requested filename, else the production title, else a per-job fallback.
+fn output_stem(requested: Option<&str>, production_title: &str, job_id: &str) -> String {
     let raw = requested
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or(production_title);
-    let mut name: String = raw
-        .chars()
-        .map(|c| if c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.') { c } else { '_' })
-        .collect();
-    name = name.trim().trim_matches('.').to_string();
+    let mut name = sanitize_segment(raw);
+    // Drop a user-typed .mp4 extension so we control it.
+    if name.to_lowercase().ends_with(".mp4") {
+        name.truncate(name.len() - 4);
+        name = name.trim().trim_matches('.').trim().to_string();
+    }
     if name.is_empty() {
         name = format!("final-{}", job_id);
-    }
-    if !name.to_lowercase().ends_with(".mp4") {
-        name.push_str(".mp4");
     }
     name
 }
@@ -896,7 +910,8 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
-/// Persist a completed or failed edit attempt to the database.
+/// Persist a completed or failed edit attempt to the database. Returns an error
+/// (surfaced into the run's activity log) if the row cannot be written.
 #[allow(clippy::too_many_arguments)]
 fn persist_edit(
     pool: &DbPool,
@@ -909,14 +924,10 @@ fn persist_edit(
     error: Option<&str>,
     logs: &[String],
     ai: &AiSettings,
-) {
-    let mut conn = match pool.get() {
-        Ok(c) => c,
-        Err(e) => {
-            warn!("Could not persist edit result: {}", e);
-            return;
-        }
-    };
+) -> Result<(), String> {
+    let mut conn = pool
+        .get()
+        .map_err(|e| format!("database connection failed: {}", e))?;
 
     let record = NewProductionEdit {
         production_id,
@@ -934,12 +945,14 @@ fn persist_edit(
         logs: serde_json::to_string(logs).ok(),
     };
 
-    if let Err(e) = diesel::insert_into(production_edits::table)
+    diesel::insert_into(production_edits::table)
         .values(&record)
         .execute(&mut conn)
-    {
-        warn!("Failed to insert production_edit row: {}", e);
-    }
+        .map_err(|e| {
+            warn!("Failed to insert production_edit row: {}", e);
+            e.to_string()
+        })?;
+    Ok(())
 }
 
 /// Fetch progress for a job id.
@@ -960,14 +973,28 @@ pub fn get_latest_edit(
         .ok()
 }
 
+/// A single persisted edit by its row id.
+pub fn get_edit_by_id(
+    conn: &mut diesel::sqlite::SqliteConnection,
+    edit_id: i32,
+) -> Option<crate::models::ProductionEdit> {
+    production_edits::table.find(edit_id).first(conn).ok()
+}
+
 /// All persisted edit attempts for a production, newest first.
 pub fn get_all_edits(
     conn: &mut diesel::sqlite::SqliteConnection,
     production_id: i32,
 ) -> Vec<crate::models::ProductionEdit> {
-    production_edits::table
+    match production_edits::table
         .filter(production_edits::production_id.eq(production_id))
         .order(production_edits::id.desc())
         .load(conn)
-        .unwrap_or_default()
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            error!("Failed to load edit history for production {}: {}", production_id, e);
+            Vec::new()
+        }
+    }
 }
