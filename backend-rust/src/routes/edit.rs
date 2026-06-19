@@ -4,7 +4,10 @@ use serde::Deserialize;
 use crate::config::ConfigManager;
 use crate::db::DbPool;
 use crate::models::ProductionEditResponse;
-use crate::services::edit_service::{self, EditJobMap};
+use crate::services::edit_service::{self, EditJobMap, EditOptions};
+
+fn default_captions() -> bool { true }
+fn default_music_volume() -> f32 { 0.2 }
 
 #[derive(Deserialize)]
 pub struct StartEditRequest {
@@ -14,6 +17,21 @@ pub struct StartEditRequest {
     /// notes, tone, etc.).
     #[serde(default)]
     pub instructions: Option<String>,
+    /// Optional directory for the final video. Empty → app-data edits folder.
+    #[serde(default)]
+    pub output_dir: Option<String>,
+    /// Optional filename for the final video. Empty → derived from the title.
+    #[serde(default)]
+    pub output_name: Option<String>,
+    /// Burn the spoken words into the video as captions.
+    #[serde(default = "default_captions")]
+    pub captions: bool,
+    /// Optional background-music file path, mixed under the speech.
+    #[serde(default)]
+    pub music_path: Option<String>,
+    /// Background-music volume, 0.0–1.0.
+    #[serde(default = "default_music_volume")]
+    pub music_volume: f32,
 }
 
 /// Kick off the edit pipeline for a production. Returns a job id to poll.
@@ -29,10 +47,19 @@ async fn start_edit(
     let ai = config.get_ai_settings();
     let edits_dir = config.get_edits_directory();
 
+    let opts = EditOptions {
+        script: body.script.clone(),
+        instructions: body.instructions.clone(),
+        output_dir: body.output_dir.clone(),
+        output_name: body.output_name.clone(),
+        captions: body.captions,
+        music_path: body.music_path.clone(),
+        music_volume: body.music_volume,
+    };
+
     match edit_service::start_edit(
         production_id,
-        body.script.clone(),
-        body.instructions.clone(),
+        opts,
         pool.get_ref().clone(),
         ai,
         edits_dir,
@@ -76,6 +103,23 @@ async fn get_latest_edit(
         Some(edit) => HttpResponse::Ok().json(ProductionEditResponse::from(edit)),
         None => HttpResponse::Ok().json(serde_json::Value::Null),
     }
+}
+
+/// Full edit history for a production (newest first) — script, EDL, activity
+/// log, output path, and error per run.
+#[get("/productions/{production_id}/edits")]
+async fn list_edits(
+    pool: web::Data<DbPool>,
+    path: web::Path<i32>,
+) -> HttpResponse {
+    let mut conn = pool.get().expect("Failed to get DB connection");
+    let production_id = path.into_inner();
+
+    let edits: Vec<ProductionEditResponse> = edit_service::get_all_edits(&mut conn, production_id)
+        .into_iter()
+        .map(ProductionEditResponse::from)
+        .collect();
+    HttpResponse::Ok().json(edits)
 }
 
 /// Reveal the latest final video (or the production's edit folder) in the OS
@@ -162,6 +206,7 @@ fn reveal_in_explorer(path: &str, select: bool) -> Result<(), String> {
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(start_edit)
         .service(edit_status)
+        .service(list_edits)
         .service(get_latest_edit)
         .service(reveal_edit_output);
 }

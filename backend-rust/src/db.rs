@@ -48,6 +48,7 @@ fn run_migrations(conn: &mut SqliteConnection) {
         include_str!("../migrations/002_ai_generations/up.sql"),
         include_str!("../migrations/003_ai_youtube_fields/up.sql"),
         include_str!("../migrations/004_production_edits/up.sql"),
+        include_str!("../migrations/005_edit_logs/up.sql"),
     ];
 
     for up_sql in migrations {

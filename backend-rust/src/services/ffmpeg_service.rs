@@ -305,8 +305,14 @@ pub fn extract_audio(video_path: &Path, out_dir: &Path) -> Result<PathBuf, Strin
 
 /// Extract a single clip `[start, end)` (seconds) from `input` and normalize it
 /// to a fixed `width`x`height`/`fps`, H.264 + AAC, yuv420p. Normalizing every
-/// segment to the same spec lets the final concat use stream copy. Returns an
-/// error (with the tail of ffmpeg's stderr) on failure.
+/// segment to the same spec lets the final concat use stream copy.
+///
+/// When `subtitle_name` is set, that subtitle file (an SRT in the same directory
+/// as `out_path`) is burned into the frame. It is passed as a bare filename and
+/// ffmpeg is run with its working directory set to the output folder, which
+/// sidesteps the `subtitles` filter's painful path escaping on Windows.
+///
+/// Returns an error (with the tail of ffmpeg's stderr) on failure.
 pub fn extract_clip_segment(
     input: &Path,
     start: f32,
@@ -315,13 +321,15 @@ pub fn extract_clip_segment(
     height: i32,
     fps: f32,
     out_path: &Path,
+    subtitle_name: Option<&str>,
 ) -> Result<(), String> {
     let duration = end - start;
     if duration <= 0.0 {
         return Err(format!("Invalid clip range: start {} >= end {}", start, end));
     }
-    if let Some(parent) = out_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    let parent = out_path.parent().map(|p| p.to_path_buf());
+    if let Some(ref p) = parent {
+        std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
     }
 
     // Even dimensions only — libx264/yuv420p requires width and height divisible by 2.
@@ -329,15 +337,29 @@ pub fn extract_clip_segment(
     let h = (height.max(2) / 2) * 2;
     let fps = if fps > 0.0 { fps } else { 30.0 };
 
-    let vf = format!(
+    let mut vf = format!(
         "scale={w}:{h}:force_original_aspect_ratio=decrease,\
 pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps={fps}",
         w = w,
         h = h,
         fps = fps
     );
+    // Burn in captions last so they're sized relative to the final frame.
+    if let Some(name) = subtitle_name {
+        vf.push_str(&format!(
+            ",subtitles={}:force_style='Fontsize=18,Outline=1,Shadow=0,MarginV=40'",
+            name
+        ));
+    }
 
-    let output = ffmpeg_cmd()
+    let mut cmd = ffmpeg_cmd();
+    // Run from the output directory so the bare subtitle filename resolves.
+    if subtitle_name.is_some() {
+        if let Some(ref p) = parent {
+            cmd.current_dir(p);
+        }
+    }
+    let output = cmd
         .arg("-i")
         .arg(input)
         // Accurate (output-side) seek so cut points match the chosen timestamps.
@@ -366,6 +388,60 @@ pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps={fps}",
         Err(format!(
             "ffmpeg failed to extract clip from {:?}: {}",
             input,
+            stderr_tail(&output.stderr)
+        ))
+    }
+}
+
+/// Mix a background-music track under an existing video's audio and write the
+/// result to `out_path`. The music is looped to cover the whole video and
+/// ducked to `volume` (0.0–1.0); the video stream is copied untouched and only
+/// the audio is re-encoded. Returns an error (with ffmpeg stderr) on failure.
+pub fn add_background_music(
+    video: &Path,
+    music: &Path,
+    volume: f32,
+    out_path: &Path,
+) -> Result<(), String> {
+    if let Some(parent) = out_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let vol = volume.clamp(0.0, 1.0);
+    let filter = format!(
+        "[1:a]volume={vol:.3}[bg];[0:a][bg]amix=inputs=2:duration=first:dropout_transition=2[aout]",
+        vol = vol
+    );
+
+    let output = ffmpeg_cmd()
+        .arg("-i")
+        .arg(video)
+        // Loop the music input indefinitely; amix(duration=first) stops at the
+        // video's end.
+        .args(["-stream_loop", "-1"])
+        .arg("-i")
+        .arg(music)
+        .args(["-filter_complex", &filter])
+        .args([
+            "-map", "0:v",
+            "-map", "[aout]",
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-ar", "48000",
+            "-ac", "2",
+            "-movflags", "+faststart",
+            "-y",
+        ])
+        .arg(out_path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .map_err(|e| format!("Failed to run ffmpeg: {}", e))?;
+
+    if output.status.success() && out_path.exists() {
+        Ok(())
+    } else {
+        Err(format!(
+            "ffmpeg failed to add background music: {}",
             stderr_tail(&output.stderr)
         ))
     }

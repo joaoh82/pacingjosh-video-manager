@@ -89,6 +89,7 @@ diesel::table! {
         text_provider -> Nullable<Text>,
         text_model -> Nullable<Text>,
         created_at -> Timestamp,
+        logs -> Nullable<Text>,
     }
 }
 

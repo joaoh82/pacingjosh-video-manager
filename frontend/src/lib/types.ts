@@ -155,6 +155,8 @@ export interface EditDecisionList {
   transcription_provider?: string;
   text_provider?: string;
   text_model?: string;
+  captions?: boolean;
+  music?: string | null;
   clips: EditClip[];
   output?: string | null;
 }
@@ -178,18 +180,31 @@ export interface EditJobStatus {
   end_time?: string | null;
 }
 
-/** A persisted edit result for a production (latest attempt). */
+/** A persisted edit result for a production. */
 export interface ProductionEdit {
   id: number;
   production_id: number;
   status: string;
+  script?: string | null;
   instructions?: string | null;
   edl?: EditDecisionList | null;
   output_path?: string | null;
   edl_path?: string | null;
   error?: string | null;
+  logs: string[];
   transcription_provider?: string | null;
   text_provider?: string | null;
   text_model?: string | null;
   created_at: string;
+}
+
+/** Payload for starting an edit pipeline run. */
+export interface StartEditPayload {
+  script: string;
+  instructions?: string;
+  output_dir?: string;
+  output_name?: string;
+  captions?: boolean;
+  music_path?: string;
+  music_volume?: number;
 }

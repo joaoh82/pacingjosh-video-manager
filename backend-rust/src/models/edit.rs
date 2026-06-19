@@ -21,6 +21,7 @@ pub struct ProductionEdit {
     pub text_provider: Option<String>,
     pub text_model: Option<String>,
     pub created_at: NaiveDateTime,
+    pub logs: Option<String>,
 }
 
 #[derive(Debug, Insertable)]
@@ -38,6 +39,7 @@ pub struct NewProductionEdit {
     pub text_provider: Option<String>,
     pub text_model: Option<String>,
     pub created_at: NaiveDateTime,
+    pub logs: Option<String>,
 }
 
 /// API-facing shape with `edl_json` decoded into a structured value.
@@ -46,11 +48,13 @@ pub struct ProductionEditResponse {
     pub id: i32,
     pub production_id: i32,
     pub status: String,
+    pub script: Option<String>,
     pub instructions: Option<String>,
     pub edl: Option<serde_json::Value>,
     pub output_path: Option<String>,
     pub edl_path: Option<String>,
     pub error: Option<String>,
+    pub logs: Vec<String>,
     pub transcription_provider: Option<String>,
     pub text_provider: Option<String>,
     pub text_model: Option<String>,
@@ -63,15 +67,22 @@ impl From<ProductionEdit> for ProductionEditResponse {
             .edl_json
             .as_deref()
             .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
+        let logs = e
+            .logs
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
+            .unwrap_or_default();
         Self {
             id: e.id,
             production_id: e.production_id,
             status: e.status,
+            script: e.script,
             instructions: e.instructions,
             edl,
             output_path: e.output_path,
             edl_path: e.edl_path,
             error: e.error,
+            logs,
             transcription_provider: e.transcription_provider,
             text_provider: e.text_provider,
             text_model: e.text_model,

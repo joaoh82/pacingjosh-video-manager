@@ -8,6 +8,7 @@ import type {
   AiGeneration,
   EditJobStatus,
   ProductionEdit,
+  StartEditPayload,
 } from './types';
 
 declare global {
@@ -125,6 +126,11 @@ export interface BrowseFolderResponse {
 
 export async function browseFolder(): Promise<BrowseFolderResponse> {
   return fetchApi<BrowseFolderResponse>('/api/browse-folder');
+}
+
+/** Open an OS file picker (used for choosing a background-music track). */
+export async function browseFile(): Promise<BrowseFolderResponse> {
+  return fetchApi<BrowseFolderResponse>('/api/browse-file');
 }
 
 // --- Videos ---
@@ -353,7 +359,7 @@ export interface StartEditResponse {
  */
 export async function startProductionEdit(
   productionId: number,
-  data: { script: string; instructions?: string }
+  data: StartEditPayload
 ): Promise<StartEditResponse> {
   return fetchApi<StartEditResponse>(`/api/productions/${productionId}/edit`, {
     method: 'POST',
@@ -371,6 +377,13 @@ export async function getProductionEdit(
   productionId: number
 ): Promise<ProductionEdit | null> {
   return fetchApi<ProductionEdit | null>(`/api/productions/${productionId}/edit`);
+}
+
+/** Full edit history for a production (newest first). */
+export async function getProductionEdits(
+  productionId: number
+): Promise<ProductionEdit[]> {
+  return fetchApi<ProductionEdit[]>(`/api/productions/${productionId}/edits`);
 }
 
 /** Reveal the latest final video (or the edit folder) in the OS file browser. */

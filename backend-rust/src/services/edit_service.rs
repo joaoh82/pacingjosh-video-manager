@@ -151,13 +151,30 @@ struct ResolvedClipInternal {
     reason: Option<String>,
 }
 
+/// Per-run options for the edit pipeline (everything beyond the production +
+/// providers): the script, optional creator instructions, where to write the
+/// final video, whether to burn in captions, and optional background music.
+#[derive(Clone, Default)]
+pub struct EditOptions {
+    pub script: String,
+    pub instructions: Option<String>,
+    /// Directory for the final video. Empty/None → the app-data edits folder.
+    pub output_dir: Option<String>,
+    /// Filename for the final video. Empty/None → derived from the title.
+    pub output_name: Option<String>,
+    /// Burn the spoken words into the video as captions (default true).
+    pub captions: bool,
+    /// Optional background-music file path, mixed under the speech.
+    pub music_path: Option<String>,
+    /// Background-music volume, 0.0–1.0 (default 0.2).
+    pub music_volume: f32,
+}
+
 /// Start a background edit pipeline for a production. Returns the job id used to
 /// poll progress. Fails fast if the production has no videos.
-#[allow(clippy::too_many_arguments)]
 pub fn start_edit(
     production_id: i32,
-    script: String,
-    instructions: Option<String>,
+    opts: EditOptions,
     pool: DbPool,
     ai: AiSettings,
     edits_dir: PathBuf,
@@ -172,8 +189,13 @@ pub fn start_edit(
     if videos.is_empty() {
         return Err("This production has no videos. Add the raw takes to it first.".to_string());
     }
-    if script.trim().is_empty() {
+    if opts.script.trim().is_empty() {
         return Err("A script is required to plan the edit.".to_string());
+    }
+    if let Some(m) = opts.music_path.as_deref().filter(|s| !s.is_empty()) {
+        if !std::path::Path::new(m).exists() {
+            return Err(format!("Background music file not found: {}", m));
+        }
     }
 
     let takes: Vec<TakeMeta> = videos
@@ -204,8 +226,7 @@ pub fn start_edit(
                 &job_id_thread,
                 production_id,
                 production_title,
-                script,
-                instructions,
+                opts,
                 takes,
                 pool,
                 ai,
@@ -223,36 +244,39 @@ fn run_edit(
     job_id: &str,
     production_id: i32,
     production_title: String,
-    script: String,
-    instructions: Option<String>,
+    opts: EditOptions,
     takes: Vec<TakeMeta>,
     pool: DbPool,
     ai: AiSettings,
     edits_dir: PathBuf,
     edit_map: EditJobMap,
 ) {
-    match run_edit_inner(
+    let result = run_edit_inner(
         job_id,
         production_id,
         &production_title,
-        &script,
-        instructions.as_deref(),
+        &opts,
         &takes,
         &ai,
         &edits_dir,
         &edit_map,
-    ) {
+    );
+
+    // Snapshot the activity log so the persisted row matches what the user saw.
+    let logs = snapshot_logs(&edit_map, job_id);
+
+    match result {
         Ok((edl_value, edl_path, output_path)) => {
             persist_edit(
                 &pool,
                 production_id,
                 "completed",
-                &script,
-                instructions.as_deref(),
+                &opts,
                 Some(&edl_value),
                 Some(&output_path),
                 Some(&edl_path),
                 None,
+                &logs,
                 &ai,
             );
             update(&edit_map, job_id, |p| {
@@ -272,12 +296,12 @@ fn run_edit(
                 &pool,
                 production_id,
                 "failed",
-                &script,
-                instructions.as_deref(),
+                &opts,
                 None,
                 None,
                 None,
                 Some(&e),
+                &logs,
                 &ai,
             );
             update(&edit_map, job_id, |p| {
@@ -291,18 +315,28 @@ fn run_edit(
     }
 }
 
+/// Copy the current activity-log lines out of the progress map.
+fn snapshot_logs(edit_map: &EditJobMap, job_id: &str) -> Vec<String> {
+    edit_map
+        .lock()
+        .ok()
+        .and_then(|m| m.get(job_id).map(|p| p.logs.clone()))
+        .unwrap_or_default()
+}
+
 /// The pipeline proper. Returns (edl json value, edl path, output video path).
 fn run_edit_inner(
     job_id: &str,
     production_id: i32,
     production_title: &str,
-    script: &str,
-    instructions: Option<&str>,
+    opts: &EditOptions,
     takes: &[TakeMeta],
     ai: &AiSettings,
     edits_dir: &std::path::Path,
     edit_map: &EditJobMap,
 ) -> Result<(serde_json::Value, PathBuf, PathBuf), String> {
+    let script = opts.script.as_str();
+    let instructions = opts.instructions.as_deref();
     let prod_dir = edits_dir.join(format!("production-{}", production_id));
     std::fs::create_dir_all(&prod_dir).map_err(|e| format!("Failed to create output dir: {}", e))?;
 
@@ -362,14 +396,28 @@ fn run_edit_inner(
     }
     log_msg(edit_map, job_id, &format!("Planned {} clip(s) across the timeline.", resolved.len()));
 
-    // Build the EDL JSON deliverable (grouped by scene).
-    let output_path = prod_dir.join(format!("final-{}.mp4", job_id));
+    // Resolve where the final video should be written.
+    let output_path = resolve_output_path(opts, &prod_dir, production_title, job_id)?;
+    let music_path = opts
+        .music_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from);
+    let music_name = music_path
+        .as_ref()
+        .and_then(|p| p.file_name())
+        .map(|f| f.to_string_lossy().to_string());
+
+    // Build the EDL JSON deliverable.
     let edl_value = build_edl_json(
         production_id,
         production_title,
         ai,
         &resolved,
         &output_path,
+        opts.captions,
+        music_name.as_deref(),
     );
     let edl_path = prod_dir.join(format!("edit-{}.json", job_id));
     let pretty = serde_json::to_string_pretty(&edl_value).unwrap_or_else(|_| "{}".to_string());
@@ -384,7 +432,14 @@ fn run_edit_inner(
         edit_map,
         job_id,
         "stitching",
-        &format!("Cutting {} clip(s) at {}x{} {:.0}fps…", resolved.len(), target_w, target_h, target_fps),
+        &format!(
+            "Cutting {} clip(s) at {}x{} {:.0}fps{}…",
+            resolved.len(),
+            target_w,
+            target_h,
+            target_fps,
+            if opts.captions { " with captions" } else { "" }
+        ),
     );
     update(edit_map, job_id, |p| {
         p.total = resolved.len() as i64;
@@ -401,6 +456,24 @@ fn run_edit_inner(
             job_id,
             &format!("Cutting clip {}/{}: {} [{:.2}s–{:.2}s]", i + 1, resolved.len(), clip.filename, clip.start, clip.end),
         );
+
+        // Build per-clip captions (re-timed to the segment) when enabled and the
+        // take has word timestamps.
+        let sub_name = if opts.captions {
+            let words = transcripts.get(&clip.video_id).map(|w| w.as_slice()).unwrap_or(&[]);
+            match build_clip_srt(words, clip.start, clip.end) {
+                Some(srt) => {
+                    let name = format!("seg_{:04}.srt", i);
+                    std::fs::write(work_dir.join(&name), srt)
+                        .map_err(|e| format!("Failed to write captions file: {}", e))?;
+                    Some(name)
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
+
         let seg = work_dir.join(format!("seg_{:04}.mp4", i));
         ffmpeg_service::extract_clip_segment(
             std::path::Path::new(&clip.file_path),
@@ -410,13 +483,32 @@ fn run_edit_inner(
             target_h,
             target_fps,
             &seg,
+            sub_name.as_deref(),
         )?;
         segments.push(seg);
         update(edit_map, job_id, |p| p.processed = (i + 1) as i64);
     }
 
-    set_stage(edit_map, job_id, "stitching", "Joining clips into the final video…");
-    ffmpeg_service::concat_clips(&segments, &output_path)?;
+    // Concatenate. If music is requested, concat to a temp file first, then mix.
+    if let Some(music) = music_path.as_ref().filter(|p| p.exists()) {
+        let concat_tmp = work_dir.join("_concat.mp4");
+        set_stage(edit_map, job_id, "stitching", "Joining clips…");
+        ffmpeg_service::concat_clips(&segments, &concat_tmp)?;
+
+        set_stage(edit_map, job_id, "mixing", "Adding background music…");
+        match ffmpeg_service::add_background_music(&concat_tmp, music, opts.music_volume, &output_path) {
+            Ok(()) => log_msg(edit_map, job_id, "Mixed in background music."),
+            Err(e) => {
+                warn!("[edit {}] background music failed: {}", job_id, e);
+                log_msg(edit_map, job_id, &format!("Background music failed ({}). Keeping the cut without music.", e));
+                std::fs::copy(&concat_tmp, &output_path)
+                    .map_err(|e| format!("Failed to write final video: {}", e))?;
+            }
+        }
+    } else {
+        set_stage(edit_map, job_id, "stitching", "Joining clips into the final video…");
+        ffmpeg_service::concat_clips(&segments, &output_path)?;
+    }
 
     // Best-effort cleanup of intermediate segments.
     let _ = std::fs::remove_dir_all(&work_dir);
@@ -427,6 +519,47 @@ fn run_edit_inner(
     log_msg(edit_map, job_id, &format!("Final video: {}", output_path.display()));
 
     Ok((edl_value, edl_path, output_path))
+}
+
+/// Decide where the final video file goes: a user-chosen directory + filename,
+/// or the app-data edit folder with a per-job name.
+fn resolve_output_path(
+    opts: &EditOptions,
+    prod_dir: &std::path::Path,
+    production_title: &str,
+    job_id: &str,
+) -> Result<PathBuf, String> {
+    let dir = opts.output_dir.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    match dir {
+        Some(d) => {
+            let dir = PathBuf::from(d);
+            std::fs::create_dir_all(&dir)
+                .map_err(|e| format!("Failed to create output directory {}: {}", d, e))?;
+            Ok(dir.join(output_filename(opts.output_name.as_deref(), production_title, job_id)))
+        }
+        None => Ok(prod_dir.join(format!("final-{}.mp4", job_id))),
+    }
+}
+
+/// Build a safe `.mp4` filename from the requested name (or the production
+/// title), stripping path separators and other awkward characters.
+fn output_filename(requested: Option<&str>, production_title: &str, job_id: &str) -> String {
+    let raw = requested
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(production_title);
+    let mut name: String = raw
+        .chars()
+        .map(|c| if c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.') { c } else { '_' })
+        .collect();
+    name = name.trim().trim_matches('.').to_string();
+    if name.is_empty() {
+        name = format!("final-{}", job_id);
+    }
+    if !name.to_lowercase().ends_with(".mp4") {
+        name.push_str(".mp4");
+    }
+    name
 }
 
 /// Substitute the `{script}`, `{instructions}`, and `{transcripts}` tokens into
@@ -588,6 +721,8 @@ fn build_edl_json(
     ai: &AiSettings,
     resolved: &[ResolvedClipInternal],
     output_path: &std::path::Path,
+    captions: bool,
+    music: Option<&str>,
 ) -> serde_json::Value {
     let clips: Vec<serde_json::Value> = resolved
         .iter()
@@ -612,9 +747,86 @@ fn build_edl_json(
         "transcription_provider": ai.transcription_provider,
         "text_provider": ai.text_provider,
         "text_model": ai.text_model,
+        "captions": captions,
+        "music": music,
         "clips": clips,
         "output": output_path.file_name().map(|f| f.to_string_lossy().to_string()),
     })
+}
+
+/// Build an SRT for one clip: keep the words inside `[clip_start, clip_end]`,
+/// re-time them to start at 0 (the trimmed segment's timeline), and group them
+/// into short, readable caption cues. Returns `None` when the clip has no words.
+fn build_clip_srt(words: &[TranscriptWord], clip_start: f32, clip_end: f32) -> Option<String> {
+    let clip_dur = clip_end - clip_start;
+    let local: Vec<TranscriptWord> = words
+        .iter()
+        .filter(|w| w.end > clip_start && w.start < clip_end)
+        .map(|w| TranscriptWord {
+            text: w.text.clone(),
+            start: (w.start - clip_start).clamp(0.0, clip_dur),
+            end: (w.end - clip_start).clamp(0.0, clip_dur),
+        })
+        .filter(|w| !w.text.trim().is_empty())
+        .collect();
+
+    if local.is_empty() {
+        return None;
+    }
+
+    // Group into cues: break on long pauses, after ~7 words, or ~3s.
+    const MAX_WORDS: usize = 7;
+    const MAX_DUR: f32 = 3.0;
+    const GAP: f32 = 0.7;
+
+    let mut cues: Vec<(f32, f32, String)> = Vec::new();
+    let mut start = local[0].start;
+    let mut end = local[0].end;
+    let mut buf: Vec<&str> = Vec::new();
+
+    for (i, w) in local.iter().enumerate() {
+        let gap_break = !buf.is_empty() && (w.start - end) > GAP;
+        let len_break = buf.len() >= MAX_WORDS;
+        let dur_break = !buf.is_empty() && (w.end - start) > MAX_DUR;
+        if gap_break || len_break || dur_break {
+            cues.push((start, end, buf.join(" ")));
+            buf.clear();
+        }
+        if buf.is_empty() {
+            start = w.start;
+        }
+        buf.push(w.text.trim());
+        end = w.end;
+        if i == local.len() - 1 && !buf.is_empty() {
+            cues.push((start, end, buf.join(" ")));
+        }
+    }
+
+    let mut srt = String::new();
+    for (i, (s, e, text)) in cues.iter().enumerate() {
+        // Guarantee a strictly increasing, non-zero-length cue.
+        let end_t = if *e > *s { *e } else { *s + 0.4 };
+        srt.push_str(&format!(
+            "{}\n{} --> {}\n{}\n\n",
+            i + 1,
+            srt_time(*s),
+            srt_time(end_t),
+            text
+        ));
+    }
+    Some(srt)
+}
+
+/// Format seconds as an SRT timestamp `HH:MM:SS,mmm`.
+fn srt_time(secs: f32) -> String {
+    let secs = secs.max(0.0);
+    let total_ms = (secs * 1000.0).round() as u64;
+    let ms = total_ms % 1000;
+    let total_s = total_ms / 1000;
+    let s = total_s % 60;
+    let m = (total_s / 60) % 60;
+    let h = total_s / 3600;
+    format!("{:02}:{:02}:{:02},{:03}", h, m, s, ms)
 }
 
 /// Pick the output spec from the first clip's take: prefer the values already
@@ -690,12 +902,12 @@ fn persist_edit(
     pool: &DbPool,
     production_id: i32,
     status: &str,
-    script: &str,
-    instructions: Option<&str>,
+    opts: &EditOptions,
     edl_value: Option<&serde_json::Value>,
     output_path: Option<&PathBuf>,
     edl_path: Option<&PathBuf>,
     error: Option<&str>,
+    logs: &[String],
     ai: &AiSettings,
 ) {
     let mut conn = match pool.get() {
@@ -709,8 +921,8 @@ fn persist_edit(
     let record = NewProductionEdit {
         production_id,
         status: status.to_string(),
-        script: Some(script.to_string()),
-        instructions: instructions.map(|s| s.to_string()),
+        script: Some(opts.script.clone()),
+        instructions: opts.instructions.clone(),
         edl_json: edl_value.map(|v| v.to_string()),
         output_path: output_path.map(|p| p.to_string_lossy().to_string()),
         edl_path: edl_path.map(|p| p.to_string_lossy().to_string()),
@@ -719,6 +931,7 @@ fn persist_edit(
         text_provider: Some(ai.text_provider.clone()),
         text_model: Some(ai.text_model.clone()),
         created_at: Utc::now().naive_utc(),
+        logs: serde_json::to_string(logs).ok(),
     };
 
     if let Err(e) = diesel::insert_into(production_edits::table)
@@ -745,4 +958,16 @@ pub fn get_latest_edit(
         .order(production_edits::id.desc())
         .first(conn)
         .ok()
+}
+
+/// All persisted edit attempts for a production, newest first.
+pub fn get_all_edits(
+    conn: &mut diesel::sqlite::SqliteConnection,
+    production_id: i32,
+) -> Vec<crate::models::ProductionEdit> {
+    production_edits::table
+        .filter(production_edits::production_id.eq(production_id))
+        .order(production_edits::id.desc())
+        .load(conn)
+        .unwrap_or_default()
 }

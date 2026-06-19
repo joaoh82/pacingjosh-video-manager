@@ -45,6 +45,10 @@ Video Log Manager
 - **Transcription** - Transcribe videos via ElevenLabs (Scribe), OpenAI (Whisper), or Google Gemini
 - **Social Copy Generation** - Generate thumbnail text and Instagram / TikTok / YouTube Short titles, descriptions, tags, and hashtags from a portrait video's transcript
 - **Edit & Create Video Pipeline** - Add raw takes to a production, paste your script, and the app transcribes every take (with word-level timestamps), asks an LLM to assemble the best cut (newest clean takes, re-shoots in timeline order, warm-up "Hey …" intros trimmed), writes an **edit decision list** as JSON, then stitches the final clip with FFmpeg — all tracked with live progress
+- **Burned-in Captions** - Optionally burn the spoken words onto the final video, re-timed per clip from the transcript
+- **Background Music** - Optionally pick a music track to loop under the speech at an adjustable volume
+- **Choose Output Location** - Pick the output folder and filename for the final video (defaults to the production title)
+- **Edit History** - Every run is saved per production; reopen the modal to browse past runs, view their script, edit decision list, and activity log, or reveal the final video
 - **Editable Prompts** - Both the copy-generation prompt and the edit-planning prompt are editable in Settings
 - **Local Keys** - API keys are stored locally in `config.json` and never returned by the API after saving
 
@@ -266,15 +270,22 @@ npm run dev
 1. Create a production and add all the raw takes of your video to it (drag them in via bulk edit or the video modal).
 2. Open **Productions**, then click the **🎬 clapperboard** button on that production.
 3. Paste your **script** (Markdown is fine — scene breaks help the editor align takes) and, optionally, extra instructions (e.g. the warm-up phrase to cut, or "I re-shot scene 1 at the end").
-4. Click **Run pipeline**. The app will, in order:
+4. Optionally set:
+   - **Output folder + filename** for the final video (defaults to the app-data folder / the production title),
+   - **Burn in captions** (on by default) to overlay the spoken words,
+   - **Background music** — browse for a track and set its volume; it's looped under the speech.
+5. Click **Run pipeline**. The app will, in order:
    - Transcribe every take with word-level timestamps,
    - Ask the configured LLM to assemble the best cut from your script,
-   - Write an **edit decision list** (per-clip `video_id` + time ranges) to JSON, and
-   - Stitch the final clip with FFmpeg.
-5. When it finishes, review the per-clip breakdown and click **Reveal final video** to open it in your file browser.
+   - Write an **edit decision list** (per-clip `video_id` + time ranges) to JSON,
+   - Cut each clip (burning in captions when enabled), and
+   - Stitch the final clip with FFmpeg (mixing in music if provided).
+6. When it finishes, review the per-clip breakdown and click **Reveal final video** to open it in your file browser.
 
-Output (the EDL JSON and the final `.mp4`) is written to the app-data directory under
-`edits/production-<id>/`.
+Every run is saved. Reopen the modal any time to browse the **history** for that production —
+select a past run to see its script, edit decision list, and activity log, or click **＋ New edit**
+to start another. The EDL JSON and a `latest.json` are always written under the app-data directory
+at `edits/production-<id>/`; the final `.mp4` goes to your chosen folder (or there by default).
 
 ### Editing Metadata
 
@@ -388,8 +399,15 @@ POST   /api/ai/generate/{id}        - Transcribe + generate social copy
 POST   /api/productions/{id}/edit          - Start the edit pipeline (returns job_id)
 GET    /api/edit/status/{job_id}           - Poll live pipeline progress
 GET    /api/productions/{id}/edit          - Latest persisted edit result (EDL + output)
+GET    /api/productions/{id}/edits         - Full edit history (newest first)
 POST   /api/productions/{id}/edit/reveal   - Reveal the final video in the file browser
+GET    /api/browse-folder                  - OS folder picker (output location)
+GET    /api/browse-file                    - OS file picker (background music)
 ```
+
+The `POST /api/productions/{id}/edit` body accepts: `script` (required), and optional
+`instructions`, `output_dir`, `output_name`, `captions` (default `true`), `music_path`,
+and `music_volume` (0.0–1.0, default `0.2`).
 
 ## Database Schema
 
@@ -431,7 +449,7 @@ POST   /api/productions/{id}/edit/reveal   - Reveal the final video in the file 
 **production_edits**
 
 - id, production_id, status
-- script, instructions, edl_json (the edit decision list)
+- script, instructions, edl_json (the edit decision list), logs (activity log)
 - output_path, edl_path, error
 - transcription_provider, text_provider, text_model, created_at
 

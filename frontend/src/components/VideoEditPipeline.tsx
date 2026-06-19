@@ -1,13 +1,16 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { Production, EditJobStatus, ProductionEdit, EditDecisionList } from '@/lib/types';
+import { Production, EditJobStatus, ProductionEdit } from '@/lib/types';
 import {
   startProductionEdit,
   getEditStatus,
-  getProductionEdit,
+  getProductionEdits,
   revealEditOutput,
+  browseFolder,
+  browseFile,
 } from '@/lib/api';
+import { format } from 'date-fns';
 
 interface VideoEditPipelineProps {
   isOpen: boolean;
@@ -20,41 +23,83 @@ const STAGE_LABELS: Record<string, string> = {
   transcribing: 'Transcribing takes',
   planning: 'Planning the edit',
   stitching: 'Stitching the final video',
+  mixing: 'Adding background music',
   completed: 'Completed',
   failed: 'Failed',
 };
+
+function fmtDate(iso: string): string {
+  try {
+    return format(new Date(iso), 'MMM d, yyyy HH:mm');
+  } catch {
+    return iso;
+  }
+}
 
 export default function VideoEditPipeline({
   isOpen,
   production,
   onClose,
 }: VideoEditPipelineProps) {
+  // History
+  const [history, setHistory] = useState<ProductionEdit[]>([]);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [view, setView] = useState<'new' | 'detail'>('new');
+
+  // New-run form
   const [script, setScript] = useState('');
   const [instructions, setInstructions] = useState('');
+  const [outputDir, setOutputDir] = useState('');
+  const [outputName, setOutputName] = useState('');
+  const [captions, setCaptions] = useState(true);
+  const [musicPath, setMusicPath] = useState('');
+  const [musicVolume, setMusicVolume] = useState(0.2);
+
+  // Run state
   const [jobId, setJobId] = useState<string | null>(null);
   const [status, setStatus] = useState<EditJobStatus | null>(null);
-  const [latest, setLatest] = useState<ProductionEdit | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const running = status?.status === 'in_progress' || starting;
 
+  const loadHistory = async (pid: number, selectLatest: boolean) => {
+    try {
+      const list = await getProductionEdits(pid);
+      setHistory(list);
+      if (selectLatest && list.length > 0) {
+        setSelectedId(list[0].id);
+        setView('detail');
+      } else if (list.length === 0) {
+        setView('new');
+      }
+      // Seed the form from the most recent run so re-edits are quick.
+      if (list.length > 0) {
+        setScript((s) => s || list[0].script || '');
+        setInstructions((i) => i || list[0].instructions || '');
+      }
+    } catch {
+      setHistory([]);
+    }
+  };
+
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && production) {
       document.body.style.overflow = 'hidden';
       setError(null);
       setJobId(null);
       setStatus(null);
-      setLatest(null);
-      if (production) {
-        getProductionEdit(production.id)
-          .then((e) => {
-            setLatest(e);
-            if (e?.instructions) setInstructions(e.instructions);
-          })
-          .catch(() => setLatest(null));
-      }
+      setScript('');
+      setInstructions('');
+      setOutputDir('');
+      setOutputName('');
+      setCaptions(true);
+      setMusicPath('');
+      setMusicVolume(0.2);
+      setSelectedId(null);
+      setView('new');
+      loadHistory(production.id, true);
     } else {
       document.body.style.overflow = 'unset';
     }
@@ -64,9 +109,9 @@ export default function VideoEditPipeline({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, production]);
 
-  // Poll job progress until it reaches a terminal state.
+  // Poll job progress until terminal.
   useEffect(() => {
-    if (!jobId) return;
+    if (!jobId || !production) return;
     let cancelled = false;
 
     const tick = async () => {
@@ -77,12 +122,10 @@ export default function VideoEditPipeline({
         if (s.status === 'completed' || s.status === 'failed') {
           if (pollRef.current) clearInterval(pollRef.current);
           pollRef.current = null;
-          if (s.status === 'completed' && production) {
-            getProductionEdit(production.id).then(setLatest).catch(() => {});
-          }
+          await loadHistory(production.id, s.status === 'completed');
         }
       } catch {
-        // Transient error — keep polling.
+        // transient — keep polling
       }
     };
 
@@ -95,6 +138,7 @@ export default function VideoEditPipeline({
         pollRef.current = null;
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobId, production]);
 
   if (!isOpen || !production) return null;
@@ -111,6 +155,11 @@ export default function VideoEditPipeline({
       const res = await startProductionEdit(production.id, {
         script,
         instructions: instructions.trim() || undefined,
+        output_dir: outputDir.trim() || undefined,
+        output_name: outputName.trim() || undefined,
+        captions,
+        music_path: musicPath.trim() || undefined,
+        music_volume: musicVolume,
       });
       setJobId(res.job_id);
     } catch (e: any) {
@@ -120,33 +169,45 @@ export default function VideoEditPipeline({
     }
   };
 
+  const handleBrowseDir = async () => {
+    try {
+      const r = await browseFolder();
+      if (r.success && r.path) setOutputDir(r.path);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const handleBrowseMusic = async () => {
+    try {
+      const r = await browseFile();
+      if (r.success && r.path) setMusicPath(r.path);
+    } catch {
+      /* ignore */
+    }
+  };
+
   const handleReveal = async () => {
     try {
       await revealEditOutput(production.id);
     } catch {
-      // ignore
+      /* ignore */
     }
   };
 
+  const selected = history.find((h) => h.id === selectedId) || null;
+  const latestId = history[0]?.id ?? null;
   const pct =
     status && status.total > 0
       ? Math.min(100, Math.round((status.processed / status.total) * 100))
       : 0;
 
-  // The EDL + output to display: prefer the just-finished job, fall back to the
-  // last persisted edit.
-  const edl: EditDecisionList | null | undefined = status?.edl ?? latest?.edl;
-  const outputPath = status?.output_path ?? latest?.output_path;
-  const showResult =
-    (status?.status === 'completed' || (!status && latest?.status === 'completed')) &&
-    !!edl;
-
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto">
+    <div className="fixed inset-0 z-[60] overflow-y-auto">
       <div className="fixed inset-0 bg-black bg-opacity-50 transition-opacity" onClick={onClose} />
 
       <div className="flex min-h-full items-center justify-center p-4">
-        <div className="relative w-full max-w-3xl bg-white dark:bg-gray-800 rounded-lg shadow-xl overflow-hidden">
+        <div className="relative w-full max-w-5xl bg-white dark:bg-gray-800 rounded-lg shadow-xl overflow-hidden">
           {/* Header */}
           <div className="flex items-center justify-between p-4 border-b dark:border-gray-700">
             <div className="min-w-0">
@@ -168,174 +229,396 @@ export default function VideoEditPipeline({
             </button>
           </div>
 
-          <div className="p-4 space-y-4 max-h-[75vh] overflow-y-auto">
-            <p className="text-sm text-gray-600 dark:text-gray-400">
-              Transcribes every take in this production, asks the LLM to assemble the best cut
-              from your script (newest clean takes, re-shoots in timeline order, warm-up
-              “Hey&nbsp;…” intros trimmed), writes an edit decision list, then stitches the final
-              clip with ffmpeg. Configure API keys and prompts under{' '}
-              <span className="font-medium">Settings → AI / LLM</span>.
-            </p>
-
-            {/* Script + instructions form */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Script <span className="text-red-500">*</span>
-              </label>
-              <textarea
-                value={script}
-                onChange={(e) => setScript(e.target.value)}
-                rows={8}
-                disabled={running}
-                className="input font-mono text-xs leading-relaxed"
-                placeholder="Paste the script (Markdown is fine). Scene breaks help the editor align takes."
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Extra instructions (optional)
-              </label>
-              <textarea
-                value={instructions}
-                onChange={(e) => setInstructions(e.target.value)}
-                rows={3}
-                disabled={running}
-                className="input text-sm"
-                placeholder="e.g. I warm up by saying “Hey Sarah” — cut that; and I re-shot scene 1 at the very end."
-              />
-            </div>
-
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-xs text-gray-500 dark:text-gray-400">
-                This can take a few minutes depending on the number and length of takes.
-              </p>
-              <button onClick={handleRun} disabled={running} className="btn btn-primary text-sm whitespace-nowrap">
-                {running ? 'Running…' : showResult ? 'Run again' : 'Run pipeline'}
-              </button>
-            </div>
-
-            {error && (
-              <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
-                <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
-              </div>
-            )}
-
-            {/* Live progress */}
-            {status && (
-              <div className="card space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-gray-900 dark:text-white">
-                    {STAGE_LABELS[status.stage] || status.stage}
-                  </span>
-                  <span
-                    className={`text-xs px-2 py-0.5 rounded ${
-                      status.status === 'completed'
-                        ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400'
-                        : status.status === 'failed'
-                        ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400'
-                        : 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400'
-                    }`}
-                  >
-                    {status.status}
-                  </span>
+          <div className="grid grid-cols-1 md:grid-cols-3 max-h-[78vh]">
+            {/* History sidebar */}
+            <aside className="md:col-span-1 border-b md:border-b-0 md:border-r dark:border-gray-700 overflow-y-auto max-h-[30vh] md:max-h-[78vh]">
+              <div className="p-3">
+                <button
+                  onClick={() => {
+                    setView('new');
+                    setSelectedId(null);
+                  }}
+                  className={`btn w-full text-sm mb-3 ${view === 'new' ? 'btn-primary' : 'btn-secondary'}`}
+                  disabled={running}
+                >
+                  ＋ New edit
+                </button>
+                <div className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
+                  History
                 </div>
-
-                <p className="text-sm text-gray-600 dark:text-gray-400">{status.message}</p>
-
-                {status.status === 'in_progress' && status.total > 0 && (
-                  <div>
-                    <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 overflow-hidden">
-                      <div
-                        className="bg-primary-600 h-2 transition-all"
-                        style={{ width: `${pct}%` }}
-                      />
-                    </div>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                      {status.processed} / {status.total}
-                    </p>
-                  </div>
-                )}
-
-                {status.status === 'failed' && status.error && (
-                  <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
-                    <p className="text-sm text-red-600 dark:text-red-400 whitespace-pre-wrap">
-                      {status.error}
-                    </p>
-                  </div>
-                )}
-
-                {status.logs && status.logs.length > 0 && (
-                  <details className="text-xs">
-                    <summary className="cursor-pointer text-gray-500 dark:text-gray-400">
-                      Activity log
-                    </summary>
-                    <div className="mt-2 max-h-40 overflow-y-auto font-mono text-[11px] leading-relaxed text-gray-600 dark:text-gray-300 bg-gray-50 dark:bg-gray-900/40 rounded p-2">
-                      {status.logs.map((line, i) => (
-                        <div key={i}>{line}</div>
-                      ))}
-                    </div>
-                  </details>
+                {history.length === 0 ? (
+                  <p className="text-sm text-gray-500 dark:text-gray-400 italic">No runs yet.</p>
+                ) : (
+                  <ul className="space-y-1">
+                    {history.map((h) => (
+                      <li key={h.id}>
+                        <button
+                          onClick={() => {
+                            setSelectedId(h.id);
+                            setView('detail');
+                          }}
+                          className={`w-full text-left px-2 py-2 rounded text-sm ${
+                            selectedId === h.id && view === 'detail'
+                              ? 'bg-primary-50 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300'
+                              : 'hover:bg-gray-100 dark:hover:bg-gray-700/60 text-gray-700 dark:text-gray-300'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="truncate">{fmtDate(h.created_at)}</span>
+                            <span
+                              className={`text-[10px] px-1.5 py-0.5 rounded flex-shrink-0 ${
+                                h.status === 'completed'
+                                  ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400'
+                                  : 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400'
+                              }`}
+                            >
+                              {h.status}
+                            </span>
+                          </div>
+                          <div className="text-xs text-gray-400 dark:text-gray-500 truncate">
+                            {h.edl?.clips?.length
+                              ? `${h.edl.clips.length} clip${h.edl.clips.length !== 1 ? 's' : ''}`
+                              : h.error
+                              ? 'error'
+                              : '—'}
+                          </div>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
                 )}
               </div>
-            )}
+            </aside>
 
-            {/* Result: the edit decision list + final video */}
-            {showResult && edl && (
-              <div className="card space-y-3">
-                <div className="flex items-center justify-between gap-3">
-                  <h3 className="font-semibold text-gray-900 dark:text-white">
-                    Final cut · {edl.clips.length} clip{edl.clips.length !== 1 ? 's' : ''}
-                  </h3>
-                  {outputPath && (
-                    <button onClick={handleReveal} className="btn btn-secondary text-xs whitespace-nowrap">
-                      📁 Reveal final video
-                    </button>
+            {/* Main panel */}
+            <main className="md:col-span-2 overflow-y-auto max-h-[48vh] md:max-h-[78vh] p-4 space-y-4">
+              {/* Live progress (shown whenever a job is running/finishing) */}
+              {status && (
+                <div className="card space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium text-gray-900 dark:text-white">
+                      {STAGE_LABELS[status.stage] || status.stage}
+                    </span>
+                    <span
+                      className={`text-xs px-2 py-0.5 rounded ${
+                        status.status === 'completed'
+                          ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400'
+                          : status.status === 'failed'
+                          ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400'
+                          : 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400'
+                      }`}
+                    >
+                      {status.status}
+                    </span>
+                  </div>
+                  <p className="text-sm text-gray-600 dark:text-gray-400">{status.message}</p>
+                  {status.status === 'in_progress' && status.total > 0 && (
+                    <div>
+                      <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 overflow-hidden">
+                        <div className="bg-primary-600 h-2 transition-all" style={{ width: `${pct}%` }} />
+                      </div>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                        {status.processed} / {status.total}
+                      </p>
+                    </div>
+                  )}
+                  {status.logs && status.logs.length > 0 && (
+                    <details open={status.status === 'in_progress'} className="text-xs">
+                      <summary className="cursor-pointer text-gray-500 dark:text-gray-400">Activity log</summary>
+                      <div className="mt-2 max-h-40 overflow-y-auto font-mono text-[11px] leading-relaxed text-gray-600 dark:text-gray-300 bg-gray-50 dark:bg-gray-900/40 rounded p-2">
+                        {status.logs.map((line, i) => (
+                          <div key={i}>{line}</div>
+                        ))}
+                      </div>
+                    </details>
                   )}
                 </div>
+              )}
 
-                {outputPath && (
-                  <p className="text-xs text-gray-500 dark:text-gray-400 break-all">{outputPath}</p>
-                )}
-
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="text-left text-gray-500 dark:text-gray-400 border-b dark:border-gray-700">
-                        <th className="py-1 pr-2 font-medium">#</th>
-                        <th className="py-1 pr-2 font-medium">Take</th>
-                        <th className="py-1 pr-2 font-medium">Range</th>
-                        <th className="py-1 font-medium">Why</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {edl.clips.map((c) => (
-                        <tr key={c.order} className="border-b dark:border-gray-700/50 align-top">
-                          <td className="py-1.5 pr-2 text-gray-900 dark:text-white">{c.order}</td>
-                          <td className="py-1.5 pr-2 text-gray-900 dark:text-white break-all">
-                            {c.filename}
-                          </td>
-                          <td className="py-1.5 pr-2 text-gray-600 dark:text-gray-300 whitespace-nowrap">
-                            {c.start.toFixed(2)}s – {c.end.toFixed(2)}s
-                          </td>
-                          <td className="py-1.5 text-gray-600 dark:text-gray-400">{c.reason}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+              {error && (
+                <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+                  <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
                 </div>
+              )}
 
-                {edl.text_model && (
-                  <p className="text-xs text-gray-400 dark:text-gray-500">
-                    Planned by {edl.text_provider}/{edl.text_model} · transcribed with{' '}
-                    {edl.transcription_provider}
+              {view === 'new' ? (
+                /* ---------- New run form ---------- */
+                <div className="space-y-4">
+                  <p className="text-sm text-gray-600 dark:text-gray-400">
+                    Transcribes every take, assembles the best cut from your script, writes an edit
+                    decision list, and stitches the final clip. Configure API keys/prompts under{' '}
+                    <span className="font-medium">Settings → AI / LLM</span>.
                   </p>
-                )}
-              </div>
-            )}
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                      Script <span className="text-red-500">*</span>
+                    </label>
+                    <textarea
+                      value={script}
+                      onChange={(e) => setScript(e.target.value)}
+                      rows={7}
+                      disabled={running}
+                      className="input font-mono text-xs leading-relaxed"
+                      placeholder="Paste the script (Markdown is fine). Scene breaks help the editor align takes."
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                      Extra instructions (optional)
+                    </label>
+                    <textarea
+                      value={instructions}
+                      onChange={(e) => setInstructions(e.target.value)}
+                      rows={2}
+                      disabled={running}
+                      className="input text-sm"
+                      placeholder="e.g. I warm up by saying “Hey Sarah” — cut that; and I re-shot scene 1 at the very end."
+                    />
+                  </div>
+
+                  {/* Output location */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                        Output folder
+                      </label>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={outputDir}
+                          onChange={(e) => setOutputDir(e.target.value)}
+                          disabled={running}
+                          className="input flex-1 text-sm"
+                          placeholder="Default: app data folder"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleBrowseDir}
+                          disabled={running}
+                          className="btn btn-secondary text-sm whitespace-nowrap"
+                        >
+                          📁
+                        </button>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                        Filename
+                      </label>
+                      <input
+                        type="text"
+                        value={outputName}
+                        onChange={(e) => setOutputName(e.target.value)}
+                        disabled={running}
+                        className="input text-sm"
+                        placeholder={`${production.title}.mp4`}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Captions */}
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={captions}
+                      onChange={(e) => setCaptions(e.target.checked)}
+                      disabled={running}
+                      className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                    />
+                    <span className="text-sm text-gray-700 dark:text-gray-300">
+                      Burn in captions from the spoken words
+                    </span>
+                  </label>
+
+                  {/* Music */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                      Background music (optional)
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={musicPath}
+                        onChange={(e) => setMusicPath(e.target.value)}
+                        disabled={running}
+                        className="input flex-1 text-sm"
+                        placeholder="No music"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleBrowseMusic}
+                        disabled={running}
+                        className="btn btn-secondary text-sm whitespace-nowrap"
+                      >
+                        🎵 Browse
+                      </button>
+                    </div>
+                    {musicPath.trim() && (
+                      <div className="mt-2 flex items-center gap-3">
+                        <span className="text-xs text-gray-500 dark:text-gray-400">
+                          Music volume: {Math.round(musicVolume * 100)}%
+                        </span>
+                        <input
+                          type="range"
+                          min={0}
+                          max={1}
+                          step={0.05}
+                          value={musicVolume}
+                          onChange={(e) => setMusicVolume(parseFloat(e.target.value))}
+                          disabled={running}
+                          className="flex-1"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setMusicPath('')}
+                          disabled={running}
+                          className="text-xs text-gray-500 hover:text-red-600 dark:text-gray-400"
+                        >
+                          clear
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3 pt-1">
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      Can take a few minutes depending on the number and length of takes.
+                    </p>
+                    <button onClick={handleRun} disabled={running} className="btn btn-primary text-sm whitespace-nowrap">
+                      {running ? 'Running…' : 'Run pipeline'}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                /* ---------- History detail ---------- */
+                selected && <EditDetail edit={selected} isLatest={selected.id === latestId} onReveal={handleReveal} />
+              )}
+            </main>
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function EditDetail({
+  edit,
+  isLatest,
+  onReveal,
+}: {
+  edit: ProductionEdit;
+  isLatest: boolean;
+  onReveal: () => void;
+}) {
+  const [scriptOpen, setScriptOpen] = useState(false);
+  const clips = edit.edl?.clips ?? [];
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h3 className="font-semibold text-gray-900 dark:text-white">
+            {edit.status === 'completed' ? 'Final cut' : 'Run'} · {fmtDate(edit.created_at)}
+          </h3>
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            {clips.length} clip{clips.length !== 1 ? 's' : ''}
+            {edit.edl?.captions ? ' · captions' : ''}
+            {edit.edl?.music ? ` · music: ${edit.edl.music}` : ''}
+          </p>
+        </div>
+        {edit.status === 'completed' && edit.output_path && isLatest && (
+          <button onClick={onReveal} className="btn btn-secondary text-xs whitespace-nowrap">
+            📁 Reveal final video
+          </button>
+        )}
+      </div>
+
+      {edit.status === 'failed' && edit.error && (
+        <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+          <p className="text-sm text-red-600 dark:text-red-400 whitespace-pre-wrap">{edit.error}</p>
+        </div>
+      )}
+
+      {edit.output_path && (
+        <p className="text-xs text-gray-500 dark:text-gray-400 break-all">
+          Output: {edit.output_path}
+          {!isLatest && edit.status === 'completed' && (
+            <span className="italic"> (open this folder manually — “Reveal” opens the most recent run)</span>
+          )}
+        </p>
+      )}
+
+      {/* Script (collapsible) */}
+      {edit.script && (
+        <div>
+          <button
+            onClick={() => setScriptOpen((o) => !o)}
+            className="text-sm font-medium text-gray-600 dark:text-gray-400 hover:underline"
+          >
+            {scriptOpen ? '▼' : '▶'} Script
+          </button>
+          {scriptOpen && (
+            <pre className="mt-2 text-xs text-gray-700 dark:text-gray-300 whitespace-pre-wrap bg-gray-50 dark:bg-gray-900/40 rounded p-3 max-h-48 overflow-y-auto">
+              {edit.script}
+            </pre>
+          )}
+        </div>
+      )}
+
+      {edit.instructions && (
+        <div>
+          <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Instructions</span>
+          <p className="text-sm text-gray-700 dark:text-gray-300 mt-1 whitespace-pre-wrap">{edit.instructions}</p>
+        </div>
+      )}
+
+      {/* EDL */}
+      {clips.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-gray-500 dark:text-gray-400 border-b dark:border-gray-700">
+                <th className="py-1 pr-2 font-medium">#</th>
+                <th className="py-1 pr-2 font-medium">Take</th>
+                <th className="py-1 pr-2 font-medium">Range</th>
+                <th className="py-1 font-medium">Why</th>
+              </tr>
+            </thead>
+            <tbody>
+              {clips.map((c) => (
+                <tr key={c.order} className="border-b dark:border-gray-700/50 align-top">
+                  <td className="py-1.5 pr-2 text-gray-900 dark:text-white">{c.order}</td>
+                  <td className="py-1.5 pr-2 text-gray-900 dark:text-white break-all">{c.filename}</td>
+                  <td className="py-1.5 pr-2 text-gray-600 dark:text-gray-300 whitespace-nowrap">
+                    {c.start.toFixed(2)}s – {c.end.toFixed(2)}s
+                  </td>
+                  <td className="py-1.5 text-gray-600 dark:text-gray-400">{c.reason}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Activity log */}
+      {edit.logs && edit.logs.length > 0 && (
+        <details className="text-xs">
+          <summary className="cursor-pointer text-gray-500 dark:text-gray-400">Activity log</summary>
+          <div className="mt-2 max-h-48 overflow-y-auto font-mono text-[11px] leading-relaxed text-gray-600 dark:text-gray-300 bg-gray-50 dark:bg-gray-900/40 rounded p-2">
+            {edit.logs.map((line, i) => (
+              <div key={i}>{line}</div>
+            ))}
+          </div>
+        </details>
+      )}
+
+      {edit.text_model && (
+        <p className="text-xs text-gray-400 dark:text-gray-500">
+          Planned by {edit.text_provider}/{edit.text_model} · transcribed with {edit.transcription_provider}
+        </p>
+      )}
     </div>
   );
 }
