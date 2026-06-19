@@ -7,7 +7,7 @@ use crate::models::ProductionEditResponse;
 use crate::services::edit_service::{self, EditJobMap, EditOptions};
 
 fn default_captions() -> bool { true }
-fn default_music_volume() -> f32 { 0.2 }
+fn default_music_volume() -> f32 { 0.3 }
 
 #[derive(Deserialize)]
 pub struct StartEditRequest {

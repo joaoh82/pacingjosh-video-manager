@@ -65,7 +65,7 @@ export default function VideoEditPipeline({
   const [outputName, setOutputName] = useState('');
   const [captions, setCaptions] = useState(true);
   const [musicPath, setMusicPath] = useState('');
-  const [musicVolume, setMusicVolume] = useState(0.2);
+  const [musicVolume, setMusicVolume] = useState(0.3);
 
   // Run state
   const [jobId, setJobId] = useState<string | null>(null);
@@ -110,7 +110,7 @@ export default function VideoEditPipeline({
       setOutputName('');
       setCaptions(true);
       setMusicPath('');
-      setMusicVolume(0.2);
+      setMusicVolume(0.3);
       setSelectedId(null);
       setView('new');
       loadHistory(production.id, true);
@@ -481,7 +481,7 @@ export default function VideoEditPipeline({
                     </div>
                     {musicPath.trim() && (
                       <div className="mt-2 flex items-center gap-3">
-                        <span className="text-xs text-gray-500 dark:text-gray-400">
+                        <span className="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
                           Music volume: {Math.round(musicVolume * 100)}%
                         </span>
                         <input
@@ -503,6 +503,12 @@ export default function VideoEditPipeline({
                           clear
                         </button>
                       </div>
+                    )}
+                    {musicPath.trim() && (
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                        This is the level when no one is talking — the music ducks down
+                        automatically under the voice and swells back up in the gaps.
+                      </p>
                     )}
                   </div>
 

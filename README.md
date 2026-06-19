@@ -46,7 +46,7 @@ Video Log Manager
 - **Social Copy Generation** - Generate thumbnail text and Instagram / TikTok / YouTube Short titles, descriptions, tags, and hashtags from a portrait video's transcript
 - **Edit & Create Video Pipeline** - Add raw takes to a production, paste your script, and the app transcribes every take (with word-level timestamps), asks an LLM to assemble the best cut (newest clean takes, re-shoots in timeline order, warm-up "Hey …" intros trimmed), writes an **edit decision list** as JSON, then stitches the final clip with FFmpeg — all tracked with live progress
 - **Burned-in Captions** - Optionally burn the spoken words onto the final video, re-timed per clip from the transcript
-- **Background Music** - Optionally pick a music track to loop under the speech at an adjustable volume
+- **Background Music** - Optionally pick a music track that loops under the speech; it sits at your chosen volume during silence and **ducks automatically** under the voice (sidechain compression)
 - **Choose Output Location** - Pick the output folder; a per-production subfolder is created inside it holding the final video and its EDL JSON (nothing is written to the app's data directory)
 - **Edit History** - Every run is saved per production; reopen the modal to browse past runs, view their script, edit decision list, and activity log, or reveal the final video
 - **Editable Prompts** - Both the copy-generation prompt and the edit-planning prompt are editable in Settings
@@ -273,7 +273,7 @@ npm run dev
 4. Set:
    - **Output folder** (required) — a subfolder named after the production is created inside it, holding the final video and its EDL JSON. Optionally set the **filename**.
    - **Burn in captions** (on by default) to overlay the spoken words,
-   - **Background music** — browse for a track and set its volume; it's looped under the speech.
+   - **Background music** — browse for a track and set its volume; it's looped under the speech, sitting at that volume during silence and ducking automatically under the voice.
 5. Click **Run pipeline**. The app will, in order:
    - Transcribe every take with word-level timestamps,
    - Ask the configured LLM to assemble the best cut from your script,

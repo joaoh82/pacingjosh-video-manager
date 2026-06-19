@@ -394,9 +394,12 @@ pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps={fps}",
 }
 
 /// Mix a background-music track under an existing video's audio and write the
-/// result to `out_path`. The music is looped to cover the whole video and
-/// ducked to `volume` (0.0–1.0); the video stream is copied untouched and only
-/// the audio is re-encoded. Returns an error (with ffmpeg stderr) on failure.
+/// result to `out_path`. The music is looped to cover the whole video and sits
+/// at `volume` (0.0–1.0) when no one is speaking, then **ducks** automatically
+/// under the voice via a sidechain compressor (the voice drives the compressor
+/// on the music). The voice is kept at full level and a limiter guards against
+/// clipping. The video stream is copied untouched; only the audio is re-encoded.
+/// Returns an error (with ffmpeg stderr) on failure.
 pub fn add_background_music(
     video: &Path,
     music: &Path,
@@ -407,8 +410,18 @@ pub fn add_background_music(
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let vol = volume.clamp(0.0, 1.0);
+    // - Normalize both streams to stereo/48k so sidechaincompress can pair them.
+    // - `[voice]` is split: one copy is mixed back in at full level, the other
+    //   drives the compressor that ducks the music.
+    // - sidechaincompress: strong ratio + low threshold so speech reliably dips
+    //   the music; a moderate release lets it swell back up during pauses.
+    // - amix(normalize=0) keeps the voice at full level; alimiter prevents clips.
     let filter = format!(
-        "[1:a]volume={vol:.3}[bg];[0:a][bg]amix=inputs=2:duration=first:dropout_transition=2[aout]",
+        "[1:a]aformat=channel_layouts=stereo:sample_rates=48000,volume={vol:.3}[bg];\
+[0:a]aformat=channel_layouts=stereo:sample_rates=48000,asplit=2[voice][trigger];\
+[bg][trigger]sidechaincompress=threshold=0.04:ratio=12:attack=20:release=400:makeup=1[ducked];\
+[voice][ducked]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[mixed];\
+[mixed]alimiter=limit=0.95[aout]",
         vol = vol
     );
 
