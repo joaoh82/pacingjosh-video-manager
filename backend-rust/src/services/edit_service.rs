@@ -768,18 +768,20 @@ fn build_edl_json(
     })
 }
 
-/// Build an SRT for one clip: keep the words inside `[clip_start, clip_end]`,
-/// re-time them to start at 0 (the trimmed segment's timeline), and group them
-/// into short, readable caption cues. Returns `None` when the clip has no words.
+/// Build an SRT for one clip: keep the words inside `[clip_start, clip_end]` and
+/// group them into short, readable caption cues. Cue times stay on the SOURCE
+/// take's timeline (NOT re-based to 0): the `subtitles` filter runs before the
+/// output-side `-ss` trim, so it expects original timestamps; the trim then
+/// shifts the burned-in captions into place. Returns `None` for a clip with no
+/// words.
 fn build_clip_srt(words: &[TranscriptWord], clip_start: f32, clip_end: f32) -> Option<String> {
-    let clip_dur = clip_end - clip_start;
     let local: Vec<TranscriptWord> = words
         .iter()
         .filter(|w| w.end > clip_start && w.start < clip_end)
         .map(|w| TranscriptWord {
             text: w.text.clone(),
-            start: (w.start - clip_start).clamp(0.0, clip_dur),
-            end: (w.end - clip_start).clamp(0.0, clip_dur),
+            start: w.start.clamp(clip_start, clip_end),
+            end: w.end.clamp(clip_start, clip_end),
         })
         .filter(|w| !w.text.trim().is_empty())
         .collect();
