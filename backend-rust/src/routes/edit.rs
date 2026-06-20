@@ -1,4 +1,4 @@
-use actix_web::{get, post, web, HttpResponse};
+use actix_web::{delete, get, post, web, HttpResponse};
 use serde::Deserialize;
 
 use crate::config::ConfigManager;
@@ -134,6 +134,27 @@ async fn reveal_edit_output(
     reveal_output(output)
 }
 
+/// Delete a run: removes its files from disk (video, EDL JSON, version folder)
+/// and its database row.
+#[delete("/edits/{edit_id}")]
+async fn delete_edit(
+    pool: web::Data<DbPool>,
+    path: web::Path<i32>,
+) -> HttpResponse {
+    let edit_id = path.into_inner();
+    let mut conn = pool.get().expect("Failed to get DB connection");
+
+    match edit_service::delete_edit(&mut conn, edit_id) {
+        Ok(true) => HttpResponse::Ok().json(serde_json::json!({ "message": "Deleted" })),
+        Ok(false) => HttpResponse::NotFound().json(serde_json::json!({
+            "detail": format!("Edit not found: {}", edit_id),
+        })),
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({
+            "detail": format!("Failed to delete edit: {}", e),
+        })),
+    }
+}
+
 /// Reveal a specific run's final video in the OS file browser.
 #[post("/edits/{edit_id}/reveal")]
 async fn reveal_edit_by_id(
@@ -227,5 +248,6 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         .service(list_edits)
         .service(get_latest_edit)
         .service(reveal_edit_output)
-        .service(reveal_edit_by_id);
+        .service(reveal_edit_by_id)
+        .service(delete_edit);
 }

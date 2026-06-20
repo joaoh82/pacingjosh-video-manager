@@ -395,3 +395,8 @@ export async function revealEditOutput(productionId: number): Promise<void> {
 export async function revealEditFile(editId: number): Promise<void> {
   await fetchApi(`/api/edits/${editId}/reveal`, { method: 'POST' });
 }
+
+/** Delete a run: removes its DB row and its files (video, EDL, version folder). */
+export async function deleteEdit(editId: number): Promise<void> {
+  await fetchApi(`/api/edits/${editId}`, { method: 'DELETE' });
+}

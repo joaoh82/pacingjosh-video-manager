@@ -413,15 +413,17 @@ pub fn add_background_music(
     // - Normalize both streams to stereo/48k so sidechaincompress can pair them.
     // - `[voice]` is split: one copy is mixed back in at full level, the other
     //   drives the compressor that ducks the music.
-    // - sidechaincompress: strong ratio so speech clearly dips the music. The
-    //   threshold is set above typical room tone so the music only ducks for
-    //   actual speech and swells back up in genuine pauses; a ~300ms release
-    //   makes that recovery feel natural.
+    // - sidechaincompress ducks the music using the voice as the key. `level_sc`
+    //   boosts the DETECTION signal (not the output) so even quietly-recorded
+    //   speech reliably crosses the threshold and triggers ducking — a plain
+    //   fixed threshold misses quiet mics and the music never dips. A low
+    //   threshold + strong ratio gives a clear dip; ~300ms release lets the
+    //   music swell back up in genuine pauses (room tone stays under the bar).
     // - amix(normalize=0) keeps the voice at full level; alimiter prevents clips.
     let filter = format!(
         "[1:a]aformat=channel_layouts=stereo:sample_rates=48000,volume={vol:.3}[bg];\
 [0:a]aformat=channel_layouts=stereo:sample_rates=48000,asplit=2[voice][trigger];\
-[bg][trigger]sidechaincompress=threshold=0.1:ratio=12:attack=20:release=300:makeup=1[ducked];\
+[bg][trigger]sidechaincompress=threshold=0.04:ratio=12:attack=20:release=300:makeup=1:level_sc=6[ducked];\
 [voice][ducked]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[mixed];\
 [mixed]alimiter=limit=0.95[aout]",
         vol = vol

@@ -342,15 +342,18 @@ fn run_edit_inner(
     let script = opts.script.as_str();
     let instructions = opts.instructions.as_deref();
 
-    // Everything for this production lands under <chosen output root>/<production>/.
-    // Nothing is written to the app-data directory.
+    // Everything for this run lands under
+    // <chosen output root>/<production>/v<N>/ — a fresh version folder per run so
+    // re-edits never overwrite each other. Nothing is written to app-data.
     let root = opts
         .output_dir
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .ok_or("Choose an output folder for the final video.")?;
-    let out_dir = std::path::Path::new(root).join(production_folder_name(production_title, production_id));
+    let prod_dir = std::path::Path::new(root).join(production_folder_name(production_title, production_id));
+    let version = next_version_number(&prod_dir);
+    let out_dir = prod_dir.join(format!("v{}", version));
     std::fs::create_dir_all(&out_dir)
         .map_err(|e| format!("Failed to create output folder {}: {}", out_dir.display(), e))?;
 
@@ -544,6 +547,26 @@ fn sanitize_segment(s: &str) -> String {
         .map(|c| if c.is_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.') { c } else { '_' })
         .collect();
     cleaned.trim().trim_matches('.').trim().to_string()
+}
+
+/// Next `v<N>` version number to use inside a production folder. Scans existing
+/// `v<number>` subdirectories and returns max+1 (so deletions leave gaps rather
+/// than reusing numbers). Starts at 1.
+fn next_version_number(prod_dir: &std::path::Path) -> u32 {
+    let mut max = 0u32;
+    if let Ok(entries) = std::fs::read_dir(prod_dir) {
+        for entry in entries.flatten() {
+            if !entry.path().is_dir() {
+                continue;
+            }
+            if let Some(name) = entry.file_name().to_str() {
+                if let Some(num) = name.strip_prefix('v').and_then(|n| n.parse::<u32>().ok()) {
+                    max = max.max(num);
+                }
+            }
+        }
+    }
+    max + 1
 }
 
 /// Per-production subfolder name created inside the chosen output root. Uses the
@@ -981,6 +1004,49 @@ pub fn get_edit_by_id(
     edit_id: i32,
 ) -> Option<crate::models::ProductionEdit> {
     production_edits::table.find(edit_id).first(conn).ok()
+}
+
+/// Delete an edit: remove its files from disk (final video, EDL JSON, and the
+/// now-empty version folder) and delete the database row. Returns `false` if no
+/// such edit exists.
+pub fn delete_edit(
+    conn: &mut diesel::sqlite::SqliteConnection,
+    edit_id: i32,
+) -> Result<bool, String> {
+    let edit = match get_edit_by_id(conn, edit_id) {
+        Some(e) => e,
+        None => return Ok(false),
+    };
+
+    // Remove the output video and EDL JSON if they still exist.
+    for p in [edit.output_path.as_deref(), edit.edl_path.as_deref()]
+        .into_iter()
+        .flatten()
+    {
+        let path = std::path::Path::new(p);
+        if path.is_file() {
+            if let Err(e) = std::fs::remove_file(path) {
+                warn!("Failed to delete {}: {}", p, e);
+            }
+        }
+    }
+
+    // Remove the run's version folder if it's now empty.
+    if let Some(out) = edit.output_path.as_deref() {
+        if let Some(parent) = std::path::Path::new(out).parent() {
+            let empty = std::fs::read_dir(parent)
+                .map(|mut rd| rd.next().is_none())
+                .unwrap_or(false);
+            if empty {
+                let _ = std::fs::remove_dir(parent);
+            }
+        }
+    }
+
+    diesel::delete(production_edits::table.find(edit_id))
+        .execute(conn)
+        .map_err(|e| e.to_string())?;
+    Ok(true)
 }
 
 /// All persisted edit attempts for a production, newest first.

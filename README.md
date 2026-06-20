@@ -47,8 +47,8 @@ Video Log Manager
 - **Edit & Create Video Pipeline** - Add raw takes to a production, paste your script, and the app transcribes every take (with word-level timestamps), asks an LLM to assemble the best cut (newest clean takes, re-shoots in timeline order, warm-up "Hey …" intros trimmed), writes an **edit decision list** as JSON, then stitches the final clip with FFmpeg — all tracked with live progress
 - **Burned-in Captions** - Optionally burn the spoken words onto the final video, re-timed per clip from the transcript
 - **Background Music** - Optionally pick a music track that loops under the speech; it sits at your chosen volume during silence and **ducks automatically** under the voice (sidechain compression)
-- **Choose Output Location** - Pick the output folder; a per-production subfolder is created inside it holding the final video and its EDL JSON (nothing is written to the app's data directory)
-- **Edit History** - Every run is saved per production; reopen the modal to browse past runs, view their script, edit decision list, and activity log, or reveal the final video
+- **Choose Output Location** - Pick the output folder; each run is written to a numbered version subfolder (`<production>/v1`, `/v2`, …) so re-edits never overwrite each other (nothing is written to the app's data directory)
+- **Edit History** - Every run is saved per production; reopen the modal to browse past runs, view their script, edit decision list, and activity log, reveal the final video, or delete a run (removing its database entry and its files from disk)
 - **Editable Prompts** - Both the copy-generation prompt and the edit-planning prompt are editable in Settings
 - **Local Keys** - API keys are stored locally in `config.json` and never returned by the API after saving
 
@@ -283,10 +283,12 @@ npm run dev
 6. When it finishes, review the per-clip breakdown and click **Reveal final video** to open it in your file browser.
 
 Every run is saved. Reopen the modal any time to browse the **history** for that production —
-select a past run to see its script, edit decision list, and activity log, or click **＋ New edit**
-to start another. Output files live entirely under your chosen folder, in a per-production
-subfolder: `<output folder>/<production title>/<name>.mp4` and `<name>.json` (the edit decision
-list). Nothing is written to the app's data directory.
+select a past run to see its script, edit decision list, and activity log; **delete** it (removes
+the database entry and the files from disk); or click **＋ New edit** to start another. Output
+files live entirely under your chosen folder, in a numbered version subfolder per run:
+`<output folder>/<production title>/v<N>/<name>.mp4` and `<name>.json` (the edit decision list).
+Each run gets the next `v<N>`, so re-edits never overwrite each other. Nothing is written to the
+app's data directory.
 
 ### Editing Metadata
 
@@ -403,6 +405,7 @@ GET    /api/productions/{id}/edit          - Latest persisted edit result (EDL +
 GET    /api/productions/{id}/edits         - Full edit history (newest first)
 POST   /api/productions/{id}/edit/reveal   - Reveal the latest final video in the file browser
 POST   /api/edits/{edit_id}/reveal         - Reveal a specific run's final video
+DELETE /api/edits/{edit_id}                - Delete a run (DB row + files on disk)
 GET    /api/browse-folder                  - OS folder picker (output location)
 GET    /api/browse-file                    - OS file picker (background music)
 ```

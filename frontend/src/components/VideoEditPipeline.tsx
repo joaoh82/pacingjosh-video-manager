@@ -8,6 +8,7 @@ import {
   getProductionEdits,
   revealEditOutput,
   revealEditFile,
+  deleteEdit,
   browseFolder,
   browseFile,
 } from '@/lib/api';
@@ -437,9 +438,9 @@ export default function VideoEditPipeline({
                     </div>
                   </div>
                   <p className="text-xs text-gray-500 dark:text-gray-400 -mt-2">
-                    A subfolder named “{production.title}” is created inside this folder; the final
-                    video and its <code>.json</code> edit decision list are written there. Nothing is
-                    stored in the app&apos;s data directory.
+                    Each run is written to <code>{production.title}/v1</code>, <code>/v2</code>, … inside
+                    this folder (the final video and its <code>.json</code> edit decision list), so
+                    re-edits never overwrite each other. Nothing is stored in the app&apos;s data directory.
                   </p>
 
                   {/* Captions */}
@@ -523,7 +524,12 @@ export default function VideoEditPipeline({
                 </div>
               ) : (
                 /* ---------- History detail ---------- */
-                selected && <EditDetail edit={selected} />
+                selected && (
+                  <EditDetail
+                    edit={selected}
+                    onDeleted={() => loadHistory(production.id, true)}
+                  />
+                )
               )}
             </main>
           </div>
@@ -535,11 +541,32 @@ export default function VideoEditPipeline({
 
 function EditDetail({
   edit,
+  onDeleted,
 }: {
   edit: ProductionEdit;
+  onDeleted: () => void;
 }) {
   const [scriptOpen, setScriptOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const clips = edit.edl?.clips ?? [];
+
+  const handleDelete = async () => {
+    if (
+      !confirm(
+        'Delete this run? This permanently removes its database entry and deletes the video and JSON from disk.'
+      )
+    )
+      return;
+    setDeleting(true);
+    try {
+      await deleteEdit(edit.id);
+      onDeleted();
+    } catch (e: any) {
+      alert(e.message || 'Failed to delete run');
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -554,14 +581,23 @@ function EditDetail({
             {edit.edl?.music ? ` · music: ${edit.edl.music}` : ''}
           </p>
         </div>
-        {edit.status === 'completed' && edit.output_path && (
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {edit.status === 'completed' && edit.output_path && (
+            <button
+              onClick={() => revealEditFile(edit.id).catch(() => {})}
+              className="btn btn-secondary text-xs whitespace-nowrap"
+            >
+              📁 Reveal final video
+            </button>
+          )}
           <button
-            onClick={() => revealEditFile(edit.id).catch(() => {})}
-            className="btn btn-secondary text-xs whitespace-nowrap"
+            onClick={handleDelete}
+            disabled={deleting}
+            className="btn btn-secondary text-xs whitespace-nowrap text-red-600 dark:text-red-400"
           >
-            📁 Reveal final video
+            {deleting ? 'Deleting…' : '🗑 Delete'}
           </button>
-        )}
+        </div>
       </div>
 
       {edit.status === 'failed' && edit.error && (
