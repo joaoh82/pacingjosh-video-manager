@@ -8,6 +8,7 @@ use crate::services::edit_service::{self, EditJobMap, EditOptions};
 
 fn default_captions() -> bool { true }
 fn default_music_volume() -> f32 { 0.3 }
+fn default_music_duck_volume() -> f32 { 0.08 }
 
 #[derive(Deserialize)]
 pub struct StartEditRequest {
@@ -29,9 +30,12 @@ pub struct StartEditRequest {
     /// Optional background-music file path, mixed under the speech.
     #[serde(default)]
     pub music_path: Option<String>,
-    /// Background-music volume, 0.0–1.0.
+    /// Music volume when no one is talking, 0.0–1.0.
     #[serde(default = "default_music_volume")]
     pub music_volume: f32,
+    /// Music volume while the voice is talking (ducked level), 0.0–1.0.
+    #[serde(default = "default_music_duck_volume")]
+    pub music_duck_volume: f32,
 }
 
 /// Kick off the edit pipeline for a production. Returns a job id to poll.
@@ -54,6 +58,7 @@ async fn start_edit(
         captions: body.captions,
         music_path: body.music_path.clone(),
         music_volume: body.music_volume,
+        music_duck_volume: body.music_duck_volume,
     };
 
     match edit_service::start_edit(
@@ -202,13 +207,22 @@ fn reveal_output(output: Option<String>) -> HttpResponse {
 fn reveal_in_explorer(path: &str, select: bool) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        let mut cmd = std::process::Command::new("explorer");
-        if select {
-            cmd.args(["/select,", path]);
+        use std::os::windows::process::CommandExt;
+        // Explorer needs backslashes; our stored paths can be mixed (the output
+        // folder may have been typed/prefilled with forward slashes). Normalize,
+        // then pass the canonical `/select,"<path>"` as a single raw argument —
+        // Rust's normal arg quoting mangles it and Explorer falls back to opening
+        // the user's home folder instead of the file.
+        let win_path = path.replace('/', "\\");
+        let raw = if select {
+            format!("/select,\"{}\"", win_path)
         } else {
-            cmd.arg(path);
-        }
-        cmd.spawn().map_err(|e| e.to_string())?;
+            format!("\"{}\"", win_path)
+        };
+        std::process::Command::new("explorer")
+            .raw_arg(&raw)
+            .spawn()
+            .map_err(|e| e.to_string())?;
     }
 
     #[cfg(target_os = "macos")]

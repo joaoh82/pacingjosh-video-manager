@@ -206,5 +206,8 @@ export interface StartEditPayload {
   output_name?: string;
   captions?: boolean;
   music_path?: string;
+  /** Music volume when no one is talking (0.0–1.0). */
   music_volume?: number;
+  /** Music volume while the voice is talking — the ducked level (0.0–1.0). */
+  music_duck_volume?: number;
 }

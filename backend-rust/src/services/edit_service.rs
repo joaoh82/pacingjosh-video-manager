@@ -166,8 +166,10 @@ pub struct EditOptions {
     pub captions: bool,
     /// Optional background-music file path, mixed under the speech.
     pub music_path: Option<String>,
-    /// Background-music volume, 0.0–1.0 (default 0.2).
+    /// Music volume when no one is talking, 0.0–1.0.
     pub music_volume: f32,
+    /// Music volume while the voice is talking, 0.0–1.0 (ducked level).
+    pub music_duck_volume: f32,
 }
 
 /// Start a background edit pipeline for a production. Returns the job id used to
@@ -515,7 +517,7 @@ fn run_edit_inner(
         ffmpeg_service::concat_clips(&segments, &concat_tmp)?;
 
         set_stage(edit_map, job_id, "mixing", "Adding background music…");
-        match ffmpeg_service::add_background_music(&concat_tmp, music, opts.music_volume, &output_path) {
+        match ffmpeg_service::add_background_music(&concat_tmp, music, opts.music_volume, opts.music_duck_volume, &output_path) {
             Ok(()) => log_msg(edit_map, job_id, "Mixed in background music."),
             Err(e) => {
                 warn!("[edit {}] background music failed: {}", job_id, e);

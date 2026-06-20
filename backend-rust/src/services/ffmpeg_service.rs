@@ -394,39 +394,44 @@ pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps={fps}",
 }
 
 /// Mix a background-music track under an existing video's audio and write the
-/// result to `out_path`. The music is looped to cover the whole video and sits
-/// at `volume` (0.0–1.0) when no one is speaking, then **ducks** automatically
-/// under the voice via a sidechain compressor (the voice drives the compressor
-/// on the music). The voice is kept at full level and a limiter guards against
-/// clipping. The video stream is copied untouched; only the audio is re-encoded.
-/// Returns an error (with ffmpeg stderr) on failure.
+/// result to `out_path`, with **two explicit levels**: the looped music sits at
+/// `full_volume` when no one is speaking and drops to `duck_volume` while the
+/// voice is talking.
+///
+/// The two levels are exact rather than a vague compressor ratio: the music is
+/// split into a constant floor at `duck_volume` plus a "swing" layer at
+/// `full_volume - duck_volume`. The voice keys a sidechain compressor that slams
+/// the swing layer to ~0 during speech (so music ≈ floor = `duck_volume`) and
+/// leaves it untouched in pauses (so music ≈ floor + swing = `full_volume`).
+/// `level_sc` boosts the detector so even quietly-recorded speech triggers it,
+/// and the fast attack ducks from the very first word. The voice is mixed back
+/// at full level and a limiter guards against clipping; the video stream is
+/// copied untouched. Returns an error (with ffmpeg stderr) on failure.
 pub fn add_background_music(
     video: &Path,
     music: &Path,
-    volume: f32,
+    full_volume: f32,
+    duck_volume: f32,
     out_path: &Path,
 ) -> Result<(), String> {
     if let Some(parent) = out_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let vol = volume.clamp(0.0, 1.0);
-    // - Normalize both streams to stereo/48k so sidechaincompress can pair them.
-    // - `[voice]` is split: one copy is mixed back in at full level, the other
-    //   drives the compressor that ducks the music.
-    // - sidechaincompress ducks the music using the voice as the key. `level_sc`
-    //   boosts the DETECTION signal (not the output) so even quietly-recorded
-    //   speech reliably crosses the threshold and triggers ducking — a plain
-    //   fixed threshold misses quiet mics and the music never dips. A low
-    //   threshold + strong ratio gives a clear dip; ~300ms release lets the
-    //   music swell back up in genuine pauses (room tone stays under the bar).
-    // - amix(normalize=0) keeps the voice at full level; alimiter prevents clips.
+    let full = full_volume.clamp(0.0, 1.0);
+    let duck = duck_volume.clamp(0.0, full);
+    let swing = (full - duck).max(0.0);
+
     let filter = format!(
-        "[1:a]aformat=channel_layouts=stereo:sample_rates=48000,volume={vol:.3}[bg];\
+        "[1:a]aformat=channel_layouts=stereo:sample_rates=48000,asplit=2[m1][m2];\
+[m1]volume={swing:.3}[bgfull];\
+[m2]volume={duck:.3}[bgfloor];\
 [0:a]aformat=channel_layouts=stereo:sample_rates=48000,asplit=2[voice][trigger];\
-[bg][trigger]sidechaincompress=threshold=0.04:ratio=12:attack=20:release=300:makeup=1:level_sc=6[ducked];\
-[voice][ducked]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[mixed];\
+[bgfull][trigger]sidechaincompress=threshold=0.03:ratio=20:attack=5:release=250:makeup=1:level_sc=4[bgducked];\
+[bgducked][bgfloor]amix=inputs=2:duration=longest:normalize=0[music];\
+[voice][music]amix=inputs=2:duration=first:normalize=0[mixed];\
 [mixed]alimiter=limit=0.95[aout]",
-        vol = vol
+        swing = swing,
+        duck = duck
     );
 
     let output = ffmpeg_cmd()

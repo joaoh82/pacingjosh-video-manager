@@ -46,7 +46,7 @@ Video Log Manager
 - **Social Copy Generation** - Generate thumbnail text and Instagram / TikTok / YouTube Short titles, descriptions, tags, and hashtags from a portrait video's transcript
 - **Edit & Create Video Pipeline** - Add raw takes to a production, paste your script, and the app transcribes every take (with word-level timestamps), asks an LLM to assemble the best cut (newest clean takes, re-shoots in timeline order, warm-up "Hey …" intros trimmed), writes an **edit decision list** as JSON, then stitches the final clip with FFmpeg — all tracked with live progress
 - **Burned-in Captions** - Optionally burn the spoken words onto the final video, re-timed per clip from the transcript
-- **Background Music** - Optionally pick a music track that loops under the speech; it sits at your chosen volume during silence and **ducks automatically** under the voice (sidechain compression)
+- **Background Music** - Optionally pick a music track that loops under the speech, with two configurable levels: a volume for when no one is talking and a lower volume for while you're talking. The music ducks between them automatically (sidechain compression), so even quietly-recorded speech triggers the dip
 - **Choose Output Location** - Pick the output folder; each run is written to a numbered version subfolder (`<production>/v1`, `/v2`, …) so re-edits never overwrite each other (nothing is written to the app's data directory)
 - **Edit History** - Every run is saved per production; reopen the modal to browse past runs, view their script, edit decision list, and activity log, reveal the final video, or delete a run (removing its database entry and its files from disk)
 - **Editable Prompts** - Both the copy-generation prompt and the edit-planning prompt are editable in Settings
@@ -273,7 +273,7 @@ npm run dev
 4. Set:
    - **Output folder** (required) — a subfolder named after the production is created inside it, holding the final video and its EDL JSON. Optionally set the **filename**.
    - **Burn in captions** (on by default) to overlay the spoken words,
-   - **Background music** — browse for a track and set its volume; it's looped under the speech, sitting at that volume during silence and ducking automatically under the voice.
+   - **Background music** — browse for a track and set two volumes (one for pauses, a lower one for while talking); it loops under the speech and ducks between the two levels automatically.
 5. Click **Run pipeline**. The app will, in order:
    - Transcribe every take with word-level timestamps,
    - Ask the configured LLM to assemble the best cut from your script,
@@ -411,9 +411,10 @@ GET    /api/browse-file                    - OS file picker (background music)
 ```
 
 The `POST /api/productions/{id}/edit` body accepts: `script` and `output_dir` (both required),
-plus optional `instructions`, `output_name`, `captions` (default `true`), `music_path`, and
-`music_volume` (0.0–1.0, default `0.2`). `POST /api/edits/{edit_id}/reveal` reveals a specific
-run's final video.
+plus optional `instructions`, `output_name`, `captions` (default `true`), `music_path`,
+`music_volume` (level when no one is talking, default `0.3`), and `music_duck_volume` (level
+while talking, default `0.08`). `POST /api/edits/{edit_id}/reveal` reveals a specific run's
+final video; `DELETE /api/edits/{edit_id}` removes a run and its files.
 
 ## Database Schema
 
