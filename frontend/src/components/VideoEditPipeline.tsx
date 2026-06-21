@@ -13,15 +13,16 @@ import {
   browseFile,
 } from '@/lib/api';
 
-/** Derive the chosen output root (the parent of the per-production folder) from
- * a previous run's output path, e.g. `D:\Videos\My Prod\clip.mp4` → `D:/Videos`. */
+/** Recover the chosen output root from a previous run's output path. Outputs are
+ * written to `<root>/productions/v<N>/<file>.mp4`, so the root is everything
+ * before the `productions` segment. Returns '' if it can't be determined (e.g.
+ * an old-format path), so we don't re-nest. */
 function rootFromOutputPath(p?: string | null): string {
   if (!p) return '';
   const parts = p.replace(/\\/g, '/').split('/').filter(Boolean);
-  if (parts.length < 2) return '';
-  parts.pop(); // filename
-  parts.pop(); // per-production folder
-  return parts.join('/');
+  const idx = parts.map((s) => s.toLowerCase()).lastIndexOf('productions');
+  if (idx > 0) return parts.slice(0, idx).join('/');
+  return '';
 }
 import { format } from 'date-fns';
 import EditTimeline from './EditTimeline';
@@ -451,9 +452,10 @@ export default function VideoEditPipeline({
                     </div>
                   </div>
                   <p className="text-xs text-gray-500 dark:text-gray-400 -mt-2">
-                    Each run is written to <code>{production.title}/v1</code>, <code>/v2</code>, … inside
-                    this folder (the final video and its <code>.json</code> edit decision list), so
-                    re-edits never overwrite each other. Nothing is stored in the app&apos;s data directory.
+                    Each run is written to <code>productions/v1</code>, <code>productions/v2</code>, …
+                    inside this folder (the final video and its <code>.json</code> edit decision list),
+                    so re-edits never overwrite each other. The folder you pick stays fixed — nothing
+                    nests and nothing is stored in the app&apos;s data directory.
                   </p>
 
                   {/* Captions */}

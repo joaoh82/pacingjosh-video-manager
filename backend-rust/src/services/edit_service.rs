@@ -354,15 +354,16 @@ fn run_edit_inner(
     let instructions = opts.instructions.as_deref();
 
     // Everything for this run lands under
-    // <chosen output root>/<production>/v<N>/ — a fresh version folder per run so
-    // re-edits never overwrite each other. Nothing is written to app-data.
+    // <chosen output root>/productions/v<N>/ — a fresh version folder per run so
+    // re-edits never overwrite each other. The chosen root is used verbatim (no
+    // per-production subfolder), so re-runs don't nest. Nothing goes to app-data.
     let root = opts
         .output_dir
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .ok_or("Choose an output folder for the final video.")?;
-    let prod_dir = std::path::Path::new(root).join(production_folder_name(production_title, production_id));
+    let prod_dir = std::path::Path::new(root).join("productions");
     let version = next_version_number(&prod_dir);
     let out_dir = prod_dir.join(format!("v{}", version));
     std::fs::create_dir_all(&out_dir)
@@ -635,17 +636,6 @@ fn next_version_number(prod_dir: &std::path::Path) -> u32 {
         }
     }
     max + 1
-}
-
-/// Per-production subfolder name created inside the chosen output root. Uses the
-/// (unique) production title, falling back to `production-<id>`.
-fn production_folder_name(production_title: &str, production_id: i32) -> String {
-    let s = sanitize_segment(production_title);
-    if s.is_empty() {
-        format!("production-{}", production_id)
-    } else {
-        s
-    }
 }
 
 /// Basename (no extension) shared by the final video and its EDL JSON. Uses the

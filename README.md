@@ -48,7 +48,7 @@ Video Log Manager
 - **Burned-in Captions** - Optionally burn the spoken words onto the final video, re-timed per clip from the transcript
 - **Tighten the Cut** - Optionally remove long silences and filler ("um"/"uh") inside clips, splitting each into speech-only sub-clips (jump cuts) for a tighter result
 - **Background Music** - Optionally pick a music track that loops under the speech, with two configurable levels: a volume for when no one is talking and a lower volume for while you're talking. Ducking is driven by the transcript's word timestamps (not audio detection), so it works regardless of how quietly the speech was recorded — and a talking volume of 0% truly silences the music while you speak
-- **Choose Output Location** - Pick the output folder; each run is written to a numbered version subfolder (`<production>/v1`, `/v2`, …) so re-edits never overwrite each other (nothing is written to the app's data directory)
+- **Choose Output Location** - Pick the output folder; each run is written to a numbered version subfolder (`productions/v1`, `productions/v2`, …) so re-edits never overwrite each other. The folder you pick stays fixed (no nested production-name folders, nothing in the app's data directory)
 - **Timeline Preview** - Each finished run shows an editor-style timeline (like CapCut): a video track with clip thumbnails, a voice track showing where speech is, and a music track whose bar height drops to the ducked level under speech — handy for seeing the cut and debugging the music
 - **Edit History** - Every run is saved per production; reopen the modal to browse past runs, view their script, edit decision list, timeline, and activity log, reveal the final video, or delete a run (removing its database entry and its files from disk)
 - **Editable Prompts** - Both the copy-generation prompt and the edit-planning prompt are editable in Settings
@@ -288,7 +288,7 @@ Every run is saved. Reopen the modal any time to browse the **history** for that
 select a past run to see its script, edit decision list, and activity log; **delete** it (removes
 the database entry and the files from disk); or click **＋ New edit** to start another. Output
 files live entirely under your chosen folder, in a numbered version subfolder per run:
-`<output folder>/<production title>/v<N>/<name>.mp4` and `<name>.json` (the edit decision list).
+`<output folder>/productions/v<N>/<name>.mp4` and `<name>.json` (the edit decision list).
 Each run gets the next `v<N>`, so re-edits never overwrite each other. Nothing is written to the
 app's data directory.
 
