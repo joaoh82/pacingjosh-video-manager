@@ -51,6 +51,21 @@ fn ffmpeg_cmd() -> Command {
     Command::new(paths.ffmpeg)
 }
 
+/// The resolved ffmpeg binary path plus its version line — surfaced in the
+/// edit pipeline's activity log so it's clear which ffmpeg actually ran
+/// (the bundled sidecar vs. a system PATH ffmpeg that may behave differently).
+pub fn ffmpeg_diagnostics() -> String {
+    let paths = FFMPEG_PATHS.get().cloned().unwrap_or_default();
+    let version = ffmpeg_cmd()
+        .arg("-version")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|s| s.lines().next().map(|l| l.trim().to_string()))
+        .unwrap_or_else(|| "version unknown".to_string());
+    format!("{} — {}", paths.ffmpeg.display(), version)
+}
+
 #[allow(dead_code)]
 /// Check that ffmpeg and ffprobe are available (at the configured paths, or PATH).
 pub fn check_ffmpeg() -> Result<(), String> {

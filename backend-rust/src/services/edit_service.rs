@@ -366,6 +366,10 @@ fn run_edit_inner(
         .build()
         .map_err(|e| format!("Failed to start async runtime: {}", e))?;
 
+    // Record which ffmpeg actually runs (bundled vs system PATH) — they can
+    // differ in audio-filter behavior, which matters for music ducking.
+    log_msg(edit_map, job_id, &format!("ffmpeg: {}", ffmpeg_service::ffmpeg_diagnostics()));
+
     // --- Stage 1: transcribe each take -------------------------------------
     update(edit_map, job_id, |p| {
         p.total = takes.len() as i64;
@@ -517,6 +521,15 @@ fn run_edit_inner(
         ffmpeg_service::concat_clips(&segments, &concat_tmp)?;
 
         set_stage(edit_map, job_id, "mixing", "Adding background music…");
+        log_msg(
+            edit_map,
+            job_id,
+            &format!(
+                "Music ducking: {}% in pauses → {}% while talking",
+                (opts.music_volume * 100.0).round(),
+                (opts.music_duck_volume * 100.0).round()
+            ),
+        );
         match ffmpeg_service::add_background_music(&concat_tmp, music, opts.music_volume, opts.music_duck_volume, &output_path) {
             Ok(()) => log_msg(edit_map, job_id, "Mixed in background music."),
             Err(e) => {

@@ -19,30 +19,57 @@ fn pick_directory(app: AppHandle) -> Result<Option<String>, String> {
     Ok(picked.map(|p| p.to_string()))
 }
 
-/// Resolve the bundled ffmpeg/ffprobe sidecar binaries. On desktop Tauri, the
-/// sidecars are placed next to the app binary at runtime (Tauri takes care of
-/// platform-specific naming via the target triple suffix in `tauri.conf.json`).
-/// If the resolve fails (dev builds without sidecars installed), fall back to
-/// `None` so the backend uses system PATH.
+/// Resolve the bundled ffmpeg/ffprobe sidecar binaries so the app uses the SAME
+/// ffmpeg in dev and in a packaged build (otherwise dev silently falls back to
+/// whatever ffmpeg is on the system PATH, which may behave differently —
+/// e.g. audio filters like sidechaincompress). Resolution order:
+///   1. Packaged: the Tauri Resource directory.
+///   2. Dev: `src-tauri/binaries/<name>-<target-triple>` next to the crate.
+///   3. Fall back to `None` → system PATH.
 fn resolve_ffmpeg_paths(app: &AppHandle) -> Option<FfmpegPaths> {
     let resolver = app.path();
-
-    // Tauri's sidecar resolution renames the bundled binary to drop the target
-    // triple at install time, so at runtime we look for `ffmpeg` and `ffprobe`
-    // inside the Resource directory. Platform-specific `.exe` is added
-    // automatically by `Command` on Windows.
     let ffmpeg_name = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
     let ffprobe_name = if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" };
 
-    let ffmpeg = resolver.resolve(ffmpeg_name, BaseDirectory::Resource).ok()?;
-    let ffprobe = resolver.resolve(ffprobe_name, BaseDirectory::Resource).ok()?;
+    // 1) Packaged build: Resource directory (Tauri drops the triple at install).
+    if let (Ok(ffmpeg), Ok(ffprobe)) = (
+        resolver.resolve(ffmpeg_name, BaseDirectory::Resource),
+        resolver.resolve(ffprobe_name, BaseDirectory::Resource),
+    ) {
+        if ffmpeg.exists() && ffprobe.exists() {
+            log::info!("Using bundled ffmpeg (resource): {}", ffmpeg.display());
+            return Some(FfmpegPaths { ffmpeg, ffprobe });
+        }
+    }
 
+    // 2) Dev (`cargo tauri dev`): the unpacked sidecars in src-tauri/binaries.
+    if let Some(paths) = dev_sidecar_paths() {
+        log::info!("Using bundled ffmpeg (dev binaries): {}", paths.ffmpeg.display());
+        return Some(paths);
+    }
+
+    log::warn!("Bundled ffmpeg not found — falling back to system PATH");
+    None
+}
+
+/// Locate the unpacked ffmpeg/ffprobe sidecars in `src-tauri/binaries/` during
+/// development, using the compile-time crate dir and the runtime target triple.
+fn dev_sidecar_paths() -> Option<FfmpegPaths> {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries");
+    let arch = std::env::consts::ARCH; // e.g. "x86_64", "aarch64"
+    let triple = if cfg!(target_os = "windows") {
+        format!("{}-pc-windows-msvc", arch)
+    } else if cfg!(target_os = "macos") {
+        format!("{}-apple-darwin", arch)
+    } else {
+        format!("{}-unknown-linux-gnu", arch)
+    };
+    let ext = if cfg!(windows) { ".exe" } else { "" };
+    let ffmpeg = dir.join(format!("ffmpeg-{}{}", triple, ext));
+    let ffprobe = dir.join(format!("ffprobe-{}{}", triple, ext));
     if ffmpeg.exists() && ffprobe.exists() {
-        log::info!("Using bundled ffmpeg: {}", ffmpeg.display());
-        log::info!("Using bundled ffprobe: {}", ffprobe.display());
         Some(FfmpegPaths { ffmpeg, ffprobe })
     } else {
-        log::warn!("Bundled ffmpeg sidecars not found — falling back to system PATH");
         None
     }
 }
