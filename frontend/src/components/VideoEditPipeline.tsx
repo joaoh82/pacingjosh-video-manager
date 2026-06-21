@@ -24,6 +24,7 @@ function rootFromOutputPath(p?: string | null): string {
   return parts.join('/');
 }
 import { format } from 'date-fns';
+import EditTimeline from './EditTimeline';
 
 interface VideoEditPipelineProps {
   isOpen: boolean;
@@ -630,6 +631,11 @@ function EditDetail({
 
       {edit.output_path && (
         <p className="text-xs text-gray-500 dark:text-gray-400 break-all">Output: {edit.output_path}</p>
+      )}
+
+      {/* Editor-style timeline preview */}
+      {edit.edl?.timeline && edit.edl.timeline.clips.length > 0 && (
+        <EditTimeline timeline={edit.edl.timeline} />
       )}
 
       {/* Script (collapsible) */}

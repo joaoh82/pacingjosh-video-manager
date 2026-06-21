@@ -147,6 +147,42 @@ export interface EditClip {
   reason?: string | null;
 }
 
+/** One clip placed on the assembled timeline. */
+export interface TimelineClip {
+  order: number;
+  video_id: number;
+  filename: string;
+  /** Position on the final timeline (seconds). */
+  start: number;
+  end: number;
+  /** Range taken from the source take (seconds). */
+  source_start: number;
+  source_end: number;
+}
+
+/** A speech interval on the final timeline (where the music ducks). */
+export interface TimelineSpeech {
+  start: number;
+  end: number;
+}
+
+export interface TimelineMusic {
+  present: boolean;
+  name?: string | null;
+  /** Music level when no one is talking (0..1). */
+  full_volume: number;
+  /** Music level while talking (0..1). */
+  duck_volume: number;
+}
+
+/** Editor-style timeline: clips laid end-to-end, speech intervals, music. */
+export interface EditTimeline {
+  duration: number;
+  clips: TimelineClip[];
+  speech: TimelineSpeech[];
+  music: TimelineMusic;
+}
+
 /** The edit decision list produced by the pipeline. */
 export interface EditDecisionList {
   production_id: number;
@@ -159,6 +195,7 @@ export interface EditDecisionList {
   music?: string | null;
   clips: EditClip[];
   output?: string | null;
+  timeline?: EditTimeline;
 }
 
 /** Live progress for a running edit pipeline job. */

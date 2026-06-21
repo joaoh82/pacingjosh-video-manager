@@ -81,7 +81,7 @@ Layered architecture: **Routes → Services → Models/Schema**
 ### Frontend (frontend/src/)
 
 - **App Router** (`app/`): Pages — main grid (`page.tsx`), setup wizard (`setup/`), settings (`settings/`).
-- **Components** (`components/`): VideoGrid, VideoCard, VideoModal (player + metadata editor + AI content panel), FilterPanel, Scanner (progress polling), ProductionManager, VideoEditPipeline (the Edit & Create Video modal), BulkActions.
+- **Components** (`components/`): VideoGrid, VideoCard, VideoModal (player + metadata editor + AI content panel), FilterPanel, Scanner (progress polling), ProductionManager, VideoEditPipeline (the Edit & Create Video modal), EditTimeline (CapCut-style video/voice/music track preview built from `edl.timeline`), BulkActions.
 - **API Client** (`lib/api.ts`): Centralized typed fetch functions for all backend endpoints.
 - **Types** (`lib/types.ts`): Shared TypeScript interfaces matching backend schemas.
 

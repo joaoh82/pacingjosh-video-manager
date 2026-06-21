@@ -436,8 +436,9 @@ fn run_edit_inner(
         .and_then(|p| p.file_name())
         .map(|f| f.to_string_lossy().to_string());
 
-    // Build the EDL JSON deliverable.
-    let edl_value = build_edl_json(
+    // Build the EDL JSON deliverable, plus a timeline (clips laid end-to-end +
+    // speech intervals + music levels) for the editor-style preview.
+    let mut edl_value = build_edl_json(
         production_id,
         production_title,
         ai,
@@ -446,6 +447,7 @@ fn run_edit_inner(
         opts.captions,
         music_name.as_deref(),
     );
+    edl_value["timeline"] = build_timeline(&resolved, &transcripts, opts, music_name.as_deref());
     let pretty = serde_json::to_string_pretty(&edl_value).unwrap_or_else(|_| "{}".to_string());
     std::fs::write(&edl_path, &pretty).map_err(|e| format!("Failed to write EDL JSON: {}", e))?;
     log_msg(edit_map, job_id, &format!("Wrote edit decision list to {}", edl_path.display()));
@@ -804,6 +806,85 @@ fn build_edl_json(
         "clips": clips,
         "output": output_path.file_name().map(|f| f.to_string_lossy().to_string()),
     })
+}
+
+/// Build the editor-style timeline for the EDL: every clip laid end-to-end on a
+/// single timeline, the speech intervals (re-timed onto that timeline, used to
+/// visualize where the music ducks), the total duration, and the music levels.
+fn build_timeline(
+    resolved: &[ResolvedClipInternal],
+    transcripts: &HashMap<i32, Vec<TranscriptWord>>,
+    opts: &EditOptions,
+    music_name: Option<&str>,
+) -> serde_json::Value {
+    let mut clips = Vec::new();
+    let mut speech = Vec::new();
+    let mut cursor = 0.0f32;
+
+    for (i, c) in resolved.iter().enumerate() {
+        let dur = (c.end - c.start).max(0.0);
+        let tstart = cursor;
+        let tend = cursor + dur;
+        clips.push(serde_json::json!({
+            "order": i + 1,
+            "video_id": c.video_id,
+            "filename": c.filename,
+            "start": round2(tstart),
+            "end": round2(tend),
+            "source_start": round2(c.start),
+            "source_end": round2(c.end),
+        }));
+
+        if let Some(words) = transcripts.get(&c.video_id) {
+            for (s, e) in speech_intervals(words, c.start, c.end, 0.4) {
+                speech.push(serde_json::json!({
+                    "start": round2((s - c.start) + tstart),
+                    "end": round2((e - c.start) + tstart),
+                }));
+            }
+        }
+        cursor = tend;
+    }
+
+    let music_present = opts
+        .music_path
+        .as_deref()
+        .map(str::trim)
+        .map(|s| !s.is_empty())
+        .unwrap_or(false);
+
+    serde_json::json!({
+        "duration": round2(cursor),
+        "clips": clips,
+        "speech": speech,
+        "music": {
+            "present": music_present,
+            "name": music_name,
+            "full_volume": opts.music_volume,
+            "duck_volume": opts.music_duck_volume.min(opts.music_volume),
+        },
+    })
+}
+
+/// Merge a take's words into contiguous speech intervals (words closer than
+/// `gap` seconds join), clamped to `[clip_start, clip_end]`. Source timeline.
+fn speech_intervals(words: &[TranscriptWord], clip_start: f32, clip_end: f32, gap: f32) -> Vec<(f32, f32)> {
+    let mut out: Vec<(f32, f32)> = Vec::new();
+    for w in words.iter().filter(|w| w.end > clip_start && w.start < clip_end) {
+        let s = w.start.clamp(clip_start, clip_end);
+        let e = w.end.clamp(clip_start, clip_end);
+        if e <= s {
+            continue;
+        }
+        if let Some(last) = out.last_mut() {
+            if s - last.1 <= gap {
+                last.1 = last.1.max(e);
+                continue;
+            }
+        }
+        out.push((s, e));
+    }
+    out
 }
 
 /// Build an SRT for one clip: keep the words inside `[clip_start, clip_end]` and

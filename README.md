@@ -48,7 +48,8 @@ Video Log Manager
 - **Burned-in Captions** - Optionally burn the spoken words onto the final video, re-timed per clip from the transcript
 - **Background Music** - Optionally pick a music track that loops under the speech, with two configurable levels: a volume for when no one is talking and a lower volume for while you're talking. The music ducks between them automatically (sidechain compression), so even quietly-recorded speech triggers the dip
 - **Choose Output Location** - Pick the output folder; each run is written to a numbered version subfolder (`<production>/v1`, `/v2`, …) so re-edits never overwrite each other (nothing is written to the app's data directory)
-- **Edit History** - Every run is saved per production; reopen the modal to browse past runs, view their script, edit decision list, and activity log, reveal the final video, or delete a run (removing its database entry and its files from disk)
+- **Timeline Preview** - Each finished run shows an editor-style timeline (like CapCut): a video track with clip thumbnails, a voice track showing where speech is, and a music track whose bar height drops to the ducked level under speech — handy for seeing the cut and debugging the music
+- **Edit History** - Every run is saved per production; reopen the modal to browse past runs, view their script, edit decision list, timeline, and activity log, reveal the final video, or delete a run (removing its database entry and its files from disk)
 - **Editable Prompts** - Both the copy-generation prompt and the edit-planning prompt are editable in Settings
 - **Local Keys** - API keys are stored locally in `config.json` and never returned by the API after saving
 
