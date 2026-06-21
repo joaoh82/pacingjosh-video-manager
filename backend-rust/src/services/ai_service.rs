@@ -324,14 +324,20 @@ TRANSCRIPT:\n\"\"\"\n{}\n\"\"\"",
     Ok(copy)
 }
 
-/// Default Gemini image model ("Nano Banana") for thumbnail restyling.
-const GEMINI_IMAGE_MODEL: &str = "gemini-2.5-flash-image";
-
-/// Restyle a thumbnail frame with Gemini's image model: send the still + a style
-/// prompt, get back an edited image (keeping the subject). Returns image bytes.
-/// Requires a Gemini API key. (Text is added as a real overlay later, not by the
-/// model, so it stays accurate.)
+/// Restyle a thumbnail frame with the configured image provider/model: send the
+/// still + a style prompt, get back an edited image (keeping the subject).
+/// Returns image bytes. (Text is added as a real overlay later, not by the model,
+/// so it stays accurate.)
 pub async fn restyle_image(image_jpeg: &[u8], prompt: &str, ai: &AiSettings) -> Result<Vec<u8>, String> {
+    match ai.image_provider.as_str() {
+        "gemini" => restyle_gemini(image_jpeg, prompt, ai).await,
+        "openai" => restyle_openai(image_jpeg, prompt, ai).await,
+        other => Err(format!("Unsupported image provider: {}", other)),
+    }
+}
+
+/// Restyle via Google Gemini's image model (e.g. gemini-2.5-flash-image).
+async fn restyle_gemini(image_jpeg: &[u8], prompt: &str, ai: &AiSettings) -> Result<Vec<u8>, String> {
     let key = ai
         .gemini_api_key
         .as_deref()
@@ -348,7 +354,7 @@ pub async fn restyle_image(image_jpeg: &[u8], prompt: &str, ai: &AiSettings) -> 
         "generationConfig": { "responseModalities": ["TEXT", "IMAGE"] }
     });
 
-    let url = format!("{}/{}:generateContent?key={}", GEMINI_BASE, GEMINI_IMAGE_MODEL, key);
+    let url = format!("{}/{}:generateContent?key={}", GEMINI_BASE, ai.image_model, key);
     let resp = client()
         .post(url)
         .json(&body)
@@ -396,6 +402,48 @@ pub async fn restyle_image(image_jpeg: &[u8], prompt: &str, ai: &AiSettings) -> 
 identifiable faces — try a wider frame, or a prompt focused on the background and lighting.",
     );
     Err(err)
+}
+
+/// Restyle via OpenAI's image edit endpoint (e.g. gpt-image-1 / gpt-image-2).
+async fn restyle_openai(image_jpeg: &[u8], prompt: &str, ai: &AiSettings) -> Result<Vec<u8>, String> {
+    let key = ai
+        .openai_api_key
+        .as_deref()
+        .filter(|k| !k.is_empty())
+        .ok_or("An OpenAI API key is required for AI restyle (add it under Settings → AI / LLM).")?;
+
+    let part = reqwest::multipart::Part::bytes(image_jpeg.to_vec())
+        .file_name("frame.jpg")
+        .mime_str("image/jpeg")
+        .map_err(|e| e.to_string())?;
+    let form = reqwest::multipart::Form::new()
+        .text("model", ai.image_model.clone())
+        .text("prompt", prompt.to_string())
+        .text("size", "1536x1024")
+        .part("image[]", part);
+
+    let resp = client()
+        .post(format!("{}/images/edits", OPENAI_BASE))
+        .bearer_auth(key)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("OpenAI request failed: {}", e))?;
+
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("OpenAI image error ({}): {}", status, truncate_err(&text)));
+    }
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("Bad OpenAI response: {}", e))?;
+    if let Some(b64) = parsed["data"][0]["b64_json"].as_str() {
+        return STANDARD
+            .decode(b64)
+            .map_err(|e| format!("Failed to decode generated image: {}", e));
+    }
+    Err(format!("OpenAI did not return an image: {}", truncate_err(&text)))
 }
 
 fn truncate_err(s: &str) -> String {

@@ -36,6 +36,24 @@ pub struct AiSettings {
     /// at run time. Defaults via serde so older configs still load.
     #[serde(default = "default_edit_prompt")]
     pub edit_prompt: String,
+    /// Provider used for AI thumbnail restyling: "gemini" | "openai". Defaults
+    /// via serde so configs written before this field existed still load.
+    #[serde(default = "default_image_provider")]
+    pub image_provider: String,
+    /// Model id for AI image generation/editing (e.g. "gemini-2.5-flash-image",
+    /// "gpt-image-1", "gpt-image-2").
+    #[serde(default = "default_image_model")]
+    pub image_model: String,
+}
+
+/// Default image provider for thumbnail restyling.
+pub fn default_image_provider() -> String {
+    "gemini".to_string()
+}
+
+/// Default image model for thumbnail restyling.
+pub fn default_image_model() -> String {
+    "gemini-2.5-flash-image".to_string()
 }
 
 /// The default copy-generation prompt. Exposed so the API can offer a
@@ -108,6 +126,8 @@ impl Default for AiSettings {
             elevenlabs_api_key: None,
             system_prompt: default_system_prompt(),
             edit_prompt: default_edit_prompt(),
+            image_provider: default_image_provider(),
+            image_model: default_image_model(),
         }
     }
 }

@@ -79,6 +79,10 @@ export interface AiSettings {
   text_model: string;
   transcription_provider: string;
   transcription_model: string;
+  /** Provider used for AI thumbnail restyling: "gemini" | "openai". */
+  image_provider: string;
+  /** Model id for AI image generation/editing. */
+  image_model: string;
   gemini_api_key_set: boolean;
   openai_api_key_set: boolean;
   anthropic_api_key_set: boolean;
@@ -99,6 +103,8 @@ export interface AiSettingsUpdate {
   text_model?: string;
   transcription_provider?: string;
   transcription_model?: string;
+  image_provider?: string;
+  image_model?: string;
   gemini_api_key?: string;
   openai_api_key?: string;
   anthropic_api_key?: string;

@@ -37,6 +37,7 @@ function wrapLines(ctx: CanvasRenderingContext2D, text: string, maxWidth: number
 
 export default function ThumbnailEditor({ editId, duration, suggestedTexts }: ThumbnailEditorProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const reqIdRef = useRef(0);
   const [frame, setFrame] = useState<HTMLImageElement | null>(null);
   const [t, setT] = useState(Math.max(0, Math.min(duration, duration / 3)));
   const [loading, setLoading] = useState(false);
@@ -57,35 +58,42 @@ export default function ThumbnailEditor({ editId, duration, suggestedTexts }: Th
   const [saving, setSaving] = useState(false);
   const [savedPath, setSavedPath] = useState<string | null>(null);
 
+  // Latest request wins: while dragging the slider, stale frames are discarded.
   const loadFrame = async (loader: () => Promise<Blob>) => {
+    const myReq = ++reqIdRef.current;
     setLoading(true);
     setError(null);
     try {
       const blob = await loader();
+      if (myReq !== reqIdRef.current) return;
       const url = URL.createObjectURL(blob);
       const img = new Image();
       img.onload = () => {
-        setFrame(img);
         URL.revokeObjectURL(url);
+        if (myReq !== reqIdRef.current) return;
+        setFrame(img);
         setLoading(false);
       };
       img.onerror = () => {
         URL.revokeObjectURL(url);
+        if (myReq !== reqIdRef.current) return;
         setError('Could not load the frame image.');
         setLoading(false);
       };
       img.src = url;
     } catch (e: any) {
+      if (myReq !== reqIdRef.current) return;
       setError(e.message || 'Failed to load frame');
       setLoading(false);
     }
   };
 
-  // Load an initial frame once.
+  // Live frame preview: debounce slider changes so dragging stays responsive.
   useEffect(() => {
-    loadFrame(() => fetchEditFrame(editId, t));
+    const id = setTimeout(() => loadFrame(() => fetchEditFrame(editId, t)), 160);
+    return () => clearTimeout(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editId]);
+  }, [t, editId]);
 
   // Redraw whenever the frame or any styling changes.
   useEffect(() => {
@@ -181,7 +189,7 @@ export default function ThumbnailEditor({ editId, duration, suggestedTexts }: Th
       {/* Frame picker */}
       <div className="flex items-center gap-3">
         <span className="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap w-28">
-          Frame at {t.toFixed(1)}s
+          {loading ? 'Loading…' : `Frame at ${t.toFixed(1)}s`}
         </span>
         <input
           type="range"
@@ -192,14 +200,6 @@ export default function ThumbnailEditor({ editId, duration, suggestedTexts }: Th
           onChange={(e) => setT(parseFloat(e.target.value))}
           className="flex-1"
         />
-        <button
-          type="button"
-          onClick={() => loadFrame(() => fetchEditFrame(editId, t))}
-          disabled={loading || restyling}
-          className="btn btn-secondary text-xs whitespace-nowrap"
-        >
-          {loading ? 'Loading…' : 'Grab frame'}
-        </button>
         <button
           type="button"
           onClick={handleRestyle}

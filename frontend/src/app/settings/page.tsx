@@ -58,6 +58,8 @@ export default function SettingsPage() {
           text_model: ai.text_model,
           transcription_provider: ai.transcription_provider,
           transcription_model: ai.transcription_model,
+          image_provider: ai.image_provider,
+          image_model: ai.image_model,
           system_prompt: ai.system_prompt,
           edit_prompt: ai.edit_prompt,
         });
@@ -345,7 +347,38 @@ export default function SettingsPage() {
                     placeholder="e.g. scribe_v1, whisper-1, gemini-2.0-flash"
                   />
                 </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Image (thumbnail) provider
+                  </label>
+                  <select
+                    value={aiForm.image_provider || 'gemini'}
+                    onChange={(e) => setAiForm({ ...aiForm, image_provider: e.target.value })}
+                    className="input"
+                  >
+                    <option value="gemini">Google Gemini</option>
+                    <option value="openai">OpenAI (GPT Image)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Image (thumbnail) model
+                  </label>
+                  <input
+                    type="text"
+                    value={aiForm.image_model || ''}
+                    onChange={(e) => setAiForm({ ...aiForm, image_model: e.target.value })}
+                    className="input"
+                    placeholder="e.g. gemini-2.5-flash-image, gpt-image-1, gpt-image-2"
+                  />
+                </div>
               </div>
+
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-3">
+                The image provider/model powers the ✨ AI restyle in the thumbnail builder. OpenAI&apos;s
+                GPT Image models render text best and edit photos more permissively; Gemini is cheaper.
+                Editing close-up shots of real, identifiable faces may be refused by either provider.
+              </p>
 
               <p className="text-xs text-gray-500 dark:text-gray-400 mt-3">
                 ElevenLabs (Scribe) and OpenAI (Whisper) return word-level timestamps, which the
