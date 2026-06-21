@@ -4,12 +4,13 @@ This [Remotion](https://www.remotion.dev/) project renders the animated product
 demo shown at the top of the repo's main `README.md`.
 
 It composes the real app screenshots (from `../images/`, copied into `public/`)
-into a narrated, motion-graphics walkthrough: intro → library → scanning →
-player/metadata → productions → the AI edit-&-create pipeline → outro.
+into a narrated, motion-graphics walkthrough: intro → library → AI social copy →
+productions → the AI edit pipeline (motion-graphics explainer) → the Edit & Create
+Video result screen → AI/LLM settings → outro.
 
 ## Output
 
-- `../images/demo.mp4` — full-quality 1920×1080 @ 30fps walkthrough (~24s)
+- `../images/demo.mp4` — full-quality 1920×1080 @ 30fps walkthrough (~26s)
 - `../images/demo.gif` — optimized 720px @ 12fps GIF used as the README hero
 
 ## Develop

@@ -13,9 +13,10 @@ import { PipelineScene } from "./scenes/PipelineScene";
 import { OutroScene } from "./scenes/OutroScene";
 import {
   FilmIcon,
+  KeyIcon,
   LayersIcon,
-  RescanIcon,
   SearchIcon,
+  SparklesIcon,
 } from "./components/Icons";
 
 const FADE = 14;
@@ -36,133 +37,134 @@ const SceneFade: React.FC<{
   return <AbsoluteFill style={{ opacity }}>{children}</AbsoluteFill>;
 };
 
-// Each scene starts FADE frames before the previous ends -> cross-fade.
-const D = {
-  intro: 78,
-  library: 120,
-  scanning: 108,
-  modal: 120,
-  productions: 104,
-  pipeline: 168,
-  outro: 96,
-};
+// Every scene as a render fn + its duration. Each scene starts FADE frames
+// before the previous one ends, producing a cross-fade.
+const SCENES: { dur: number; render: (dur: number) => React.ReactNode }[] = [
+  { dur: 72, render: () => <IntroScene /> },
+  {
+    dur: 108,
+    render: (dur) => (
+      <FeatureScene
+        kicker="VIDEO LIBRARY"
+        kickerIcon={<SearchIcon size={20} />}
+        title="Your entire library, indexed"
+        bullets={[
+          { text: "Recursively scan any folder tree" },
+          { text: "Auto-generated thumbnails" },
+          { text: "Resolution, codec, FPS & orientation via FFmpeg" },
+        ]}
+        src="main-screen.png"
+        windowLabel="Video Manager  —  Library"
+        durationInFrames={dur}
+        focusX={50}
+        focusY={42}
+      />
+    ),
+  },
+  {
+    dur: 116,
+    render: (dur) => (
+      <FeatureScene
+        reverse
+        kicker="AI SOCIAL COPY"
+        kickerIcon={<SparklesIcon size={20} />}
+        title="One-click titles, captions & hashtags"
+        bullets={[
+          { text: "Punchy thumbnail-text ideas" },
+          { text: "Instagram, TikTok & YouTube copy" },
+          { text: "Written from the video's transcript" },
+        ]}
+        src="video-ai.png"
+        windowLabel="Video Manager  —  AI copy"
+        durationInFrames={dur}
+        focusX={50}
+        focusY={32}
+      />
+    ),
+  },
+  {
+    dur: 100,
+    render: (dur) => (
+      <FeatureScene
+        kicker="PRODUCTIONS"
+        kickerIcon={<LayersIcon size={20} />}
+        title="Track every production"
+        bullets={[
+          { text: "YouTube, TikTok, Instagram & more" },
+          { text: "Link clips many-to-many" },
+          { text: "Draft / published status" },
+        ]}
+        src="production.png"
+        windowLabel="Video Manager  —  Productions"
+        durationInFrames={dur}
+        focusX={50}
+        focusY={42}
+      />
+    ),
+  },
+  { dur: 150, render: () => <PipelineScene /> },
+  {
+    dur: 128,
+    render: (dur) => (
+      <FeatureScene
+        reverse
+        kicker="EDIT & CREATE"
+        kickerIcon={<FilmIcon size={20} />}
+        title="From raw takes to a finished cut"
+        bullets={[
+          { text: "Interactive CapCut-style timeline" },
+          { text: "Ducked music & burned-in captions" },
+          { text: "SEO YouTube copy, generated" },
+        ]}
+        src="edit-pipeline.png"
+        windowLabel="Edit & Create Video"
+        durationInFrames={dur}
+        focusX={50}
+        focusY={36}
+      />
+    ),
+  },
+  {
+    dur: 106,
+    render: (dur) => (
+      <FeatureScene
+        kicker="BRING YOUR OWN AI"
+        kickerIcon={<KeyIcon size={20} />}
+        title="Your keys, your models"
+        bullets={[
+          { text: "ElevenLabs / OpenAI / Gemini transcription" },
+          { text: "Gemini / OpenAI / Anthropic LLMs" },
+          { text: "Editable prompts — stored locally" },
+        ]}
+        src="settings.png"
+        windowLabel="Video Manager  —  Settings"
+        durationInFrames={dur}
+        focusX={50}
+        focusY={40}
+      />
+    ),
+  },
+  { dur: 88, render: () => <OutroScene /> },
+];
 
-const at = {
-  intro: 0,
-  library: 78 - FADE,
-  scanning: 78 - FADE + 120 - FADE,
-  modal: 78 - FADE + 120 - FADE + 108 - FADE,
-  productions: 78 - FADE + 120 - FADE + 108 - FADE + 120 - FADE,
-  pipeline: 78 - FADE + 120 - FADE + 108 - FADE + 120 - FADE + 104 - FADE,
-  outro: 78 - FADE + 120 - FADE + 108 - FADE + 120 - FADE + 104 - FADE + 168 - FADE,
-};
+// Start frames: scene i begins FADE frames before scene i-1 ends.
+const STARTS = SCENES.reduce<number[]>((acc, s, i) => {
+  acc.push(i === 0 ? 0 : acc[i - 1] + SCENES[i - 1].dur - FADE);
+  return acc;
+}, []);
 
-export const TOTAL_DURATION = at.outro + D.outro; // keep Root in sync
+export const TOTAL_DURATION =
+  STARTS[STARTS.length - 1] + SCENES[SCENES.length - 1].dur;
 
 export const Demo: React.FC = () => {
   return (
     <AbsoluteFill style={{ backgroundColor: theme.bgDeep, fontFamily: theme.font }}>
       <Background />
-
-      <Sequence from={at.intro} durationInFrames={D.intro}>
-        <SceneFade durationInFrames={D.intro}>
-          <IntroScene />
-        </SceneFade>
-      </Sequence>
-
-      <Sequence from={at.library} durationInFrames={D.library}>
-        <SceneFade durationInFrames={D.library}>
-          <FeatureScene
-            kicker="VIDEO LIBRARY"
-            kickerIcon={<SearchIcon size={20} />}
-            title="Your entire library, indexed"
-            bullets={[
-              { text: "Recursive scan of any folder tree" },
-              { text: "Auto-generated thumbnails" },
-              { text: "Duration, resolution, codec & FPS via FFmpeg" },
-            ]}
-            src="main-screen.png"
-            windowLabel="Video Manager  —  Library"
-            durationInFrames={D.library}
-            focusX={55}
-            focusY={42}
-          />
-        </SceneFade>
-      </Sequence>
-
-      <Sequence from={at.scanning} durationInFrames={D.scanning}>
-        <SceneFade durationInFrames={D.scanning}>
-          <FeatureScene
-            reverse
-            kicker="FAST INDEXING"
-            kickerIcon={<RescanIcon size={20} />}
-            title="Scan thousands of clips"
-            bullets={[
-              { text: "Live progress with ETA" },
-              { text: "Per-file status as it runs" },
-              { text: "Rescan to pick up new footage" },
-            ]}
-            src="scanning.png"
-            windowLabel="Video Manager  —  Scanning…"
-            durationInFrames={D.scanning}
-            focusX={40}
-            focusY={20}
-          />
-        </SceneFade>
-      </Sequence>
-
-      <Sequence from={at.modal} durationInFrames={D.modal}>
-        <SceneFade durationInFrames={D.modal}>
-          <FeatureScene
-            kicker="BROWSE & TAG"
-            kickerIcon={<FilmIcon size={20} />}
-            title="Play, tag & edit in place"
-            bullets={[
-              { text: "Built-in player with seeking" },
-              { text: "Inline metadata & notes" },
-              { text: "Multi-tag and categories" },
-            ]}
-            src="video-modal.png"
-            windowLabel="GRDS1843361471542.mp4"
-            durationInFrames={D.modal}
-            focusX={40}
-            focusY={45}
-          />
-        </SceneFade>
-      </Sequence>
-
-      <Sequence from={at.productions} durationInFrames={D.productions}>
-        <SceneFade durationInFrames={D.productions}>
-          <FeatureScene
-            reverse
-            kicker="PRODUCTIONS"
-            kickerIcon={<LayersIcon size={20} />}
-            title="Track every production"
-            bullets={[
-              { text: "YouTube, TikTok, Instagram & more" },
-              { text: "Link clips many-to-many" },
-              { text: "Draft / published status" },
-            ]}
-            src="production.png"
-            windowLabel="Video Manager  —  Productions"
-            durationInFrames={D.productions}
-            focusX={50}
-            focusY={40}
-          />
-        </SceneFade>
-      </Sequence>
-
-      <Sequence from={at.pipeline} durationInFrames={D.pipeline}>
-        <SceneFade durationInFrames={D.pipeline}>
-          <PipelineScene />
-        </SceneFade>
-      </Sequence>
-
-      <Sequence from={at.outro} durationInFrames={D.outro}>
-        <SceneFade durationInFrames={D.outro}>
-          <OutroScene />
-        </SceneFade>
-      </Sequence>
+      {SCENES.map((s, i) => (
+        <Sequence key={i} from={STARTS[i]} durationInFrames={s.dur}>
+          <SceneFade durationInFrames={s.dur}>{s.render(s.dur)}</SceneFade>
+        </Sequence>
+      ))}
     </AbsoluteFill>
   );
 };

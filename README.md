@@ -349,20 +349,25 @@ app's data directory.
 ![Video Player Modal](images/video-modal.png)
 *Watch videos and edit metadata in a sleek modal interface*
 
+### AI Social Copy
+
+![AI Social Copy](images/video-ai.png)
+*One click turns a video's transcript into thumbnail-text ideas plus Instagram / TikTok / YouTube copy*
+
 ### Production Manager
 
 ![Production Manager](images/production.png)
 *Create and manage productions with platform, link, and publish status*
 
-### Scanning Progress
+### Edit & Create Video (AI Pipeline)
 
-![Scanning Progress](images/scanning.png)
-*Real-time scanning progress with ETA and per-file status*
+![Edit & Create Video](images/edit-pipeline.png)
+*Assemble the best takes into a finished cut — interactive timeline, ducked music, burned-in captions, and one-click SEO YouTube copy*
 
 ### Settings Page
 
 ![Settings Page](images/settings.png)
-*Configure video directory and thumbnail preferences*
+*Configure the video directory, thumbnails, and your AI / LLM providers, models, and keys*
 
 ## Configuration
 
