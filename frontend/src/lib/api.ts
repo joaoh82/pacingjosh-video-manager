@@ -9,6 +9,7 @@ import type {
   EditJobStatus,
   ProductionEdit,
   StartEditPayload,
+  YoutubeCopy,
 } from './types';
 
 declare global {
@@ -413,5 +414,20 @@ export async function rerenderEdit(
   return fetchApi<StartEditResponse>(`/api/edits/${editId}/rerender`, {
     method: 'POST',
     body: JSON.stringify({ mute }),
+  });
+}
+
+/**
+ * Generate (or fetch cached) long-form YouTube copy — title options,
+ * description, tags, and thumbnail text — from a finished run's transcript.
+ * Pass regenerate=true to force a fresh generation.
+ */
+export async function generateEditCopy(
+  editId: number,
+  regenerate = false
+): Promise<YoutubeCopy> {
+  return fetchApi<YoutubeCopy>(`/api/edits/${editId}/copy`, {
+    method: 'POST',
+    body: JSON.stringify({ regenerate }),
   });
 }

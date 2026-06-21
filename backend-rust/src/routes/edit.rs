@@ -4,6 +4,7 @@ use serde::Deserialize;
 use crate::config::ConfigManager;
 use crate::db::DbPool;
 use crate::models::ProductionEditResponse;
+use crate::services::ai_service;
 use crate::services::edit_service::{self, EditJobMap, EditOptions};
 
 fn default_captions() -> bool { true }
@@ -196,6 +197,69 @@ async fn rerender_edit(
     }
 }
 
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub struct GenerateCopyRequest {
+    pub regenerate: bool,
+}
+
+/// Generate (or return cached) YouTube copy — title options, description, tags,
+/// and thumbnail text — from a run's final-cut transcript.
+#[post("/edits/{edit_id}/copy")]
+async fn generate_copy(
+    pool: web::Data<DbPool>,
+    config: web::Data<ConfigManager>,
+    path: web::Path<i32>,
+    body: web::Json<GenerateCopyRequest>,
+) -> HttpResponse {
+    let edit_id = path.into_inner();
+
+    let edit = {
+        let mut conn = pool.get().expect("Failed to get DB connection");
+        edit_service::get_edit_by_id(&mut conn, edit_id)
+    };
+    let edit = match edit {
+        Some(e) => e,
+        None => {
+            return HttpResponse::NotFound()
+                .json(serde_json::json!({ "detail": format!("Edit not found: {}", edit_id) }))
+        }
+    };
+
+    // Return previously-generated copy unless a regenerate was requested.
+    if !body.regenerate {
+        if let Some(existing) = edit
+            .copy_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        {
+            return HttpResponse::Ok().json(existing);
+        }
+    }
+
+    let transcript = edit_service::final_transcript_for_edit(&edit);
+    if transcript.trim().is_empty() {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "detail": "No transcript is available for this run, so copy can't be generated. Re-run the edit with a transcription provider that returns word timestamps (ElevenLabs/Whisper).",
+        }));
+    }
+
+    let ai = config.get_ai_settings();
+    let copy = match ai_service::generate_youtube_copy(&transcript, &ai).await {
+        Ok(c) => c,
+        Err(e) => {
+            return HttpResponse::InternalServerError().json(serde_json::json!({ "detail": e }))
+        }
+    };
+
+    let copy_value = serde_json::to_value(&copy).unwrap_or(serde_json::Value::Null);
+    {
+        let mut conn = pool.get().expect("Failed to get DB connection");
+        let _ = edit_service::save_copy(&mut conn, edit_id, &copy_value);
+    }
+    HttpResponse::Ok().json(copy_value)
+}
+
 /// Delete a run: removes its files from disk (video, EDL JSON, version folder)
 /// and its database row.
 #[delete("/edits/{edit_id}")]
@@ -321,5 +385,6 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         .service(reveal_edit_output)
         .service(reveal_edit_by_id)
         .service(rerender_edit)
+        .service(generate_copy)
         .service(delete_edit);
 }

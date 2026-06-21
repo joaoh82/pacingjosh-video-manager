@@ -1521,6 +1521,64 @@ pub fn get_edit_by_id(
     production_edits::table.find(edit_id).first(conn).ok()
 }
 
+/// Reconstruct the spoken transcript of a run's FINAL cut: the words inside each
+/// clip's source range, in clip order. Used to generate YouTube copy. Empty when
+/// the run has no saved transcripts (e.g. an older run, or Gemini transcription).
+pub fn final_transcript_for_edit(edit: &crate::models::ProductionEdit) -> String {
+    let transcripts: HashMap<i32, Vec<TranscriptWord>> = edit
+        .transcripts_json
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_default();
+    let edl: serde_json::Value = edit
+        .edl_json
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or(serde_json::Value::Null);
+
+    let mut out = String::new();
+    for c in edl["clips"].as_array().cloned().unwrap_or_default() {
+        let vid = match c["video_id"].as_i64() {
+            Some(v) => v as i32,
+            None => continue,
+        };
+        let start = c["start"].as_f64().unwrap_or(0.0) as f32;
+        let end = c["end"].as_f64().unwrap_or(f64::MAX) as f32;
+        if let Some(words) = transcripts.get(&vid) {
+            for w in words.iter().filter(|w| w.end > start && w.start < end) {
+                let t = w.text.trim();
+                if t.is_empty() {
+                    continue;
+                }
+                if !out.is_empty() {
+                    out.push(' ');
+                }
+                out.push_str(t);
+            }
+        }
+    }
+
+    // Keep the prompt a sane size for very long videos.
+    if out.chars().count() > 30000 {
+        out = out.chars().take(30000).collect::<String>();
+        out.push('…');
+    }
+    out
+}
+
+/// Save generated copy onto an edit row.
+pub fn save_copy(
+    conn: &mut diesel::sqlite::SqliteConnection,
+    edit_id: i32,
+    copy: &serde_json::Value,
+) -> Result<(), String> {
+    diesel::update(production_edits::table.find(edit_id))
+        .set(production_edits::copy_json.eq(Some(copy.to_string())))
+        .execute(conn)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 /// Delete an edit: remove its files from disk (final video, EDL JSON, and the
 /// now-empty version folder) and delete the database row. Returns `false` if no
 /// such edit exists.

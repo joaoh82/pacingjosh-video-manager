@@ -49,6 +49,7 @@ Video Log Manager
 - **Tighten the Cut** - Optionally remove long silences and filler ("um"/"uh") inside clips, splitting each into speech-only sub-clips (jump cuts) for a tighter result
 - **Background Music** - Optionally pick a music track that loops under the speech, with two configurable levels: a volume for when no one is talking and a lower volume for while you're talking. Ducking is driven by the transcript's word timestamps (not audio detection), so it works regardless of how quietly the speech was recorded — and a talking volume of 0% truly silences the music while you speak
 - **Choose Output Location** - Pick the output folder; each run is written to a numbered version subfolder (`productions/v1`, `productions/v2`, …) so re-edits never overwrite each other. The folder you pick stays fixed (no nested production-name folders, nothing in the app's data directory)
+- **YouTube Copy** - One click on a finished run generates 3 SEO-optimized title options, a YouTube description, keyword tags, and thumbnail-text ideas — built from the final cut's transcript and saved with the run
 - **Interactive Timeline** - Each finished run shows an editor-style timeline (like CapCut): a video track with clip thumbnails, a voice track showing where speech is, and a music track whose bar height drops to the ducked level under speech. Zoom/scroll in, click the music "bursts" you don't want, and re-render a new version with them removed — reusing the saved cut and transcription (no extra transcription cost)
 - **Edit History** - Every run is saved per production; reopen the modal to browse past runs, view their script, edit decision list, timeline, and activity log, reveal the final video, or delete a run (removing its database entry and its files from disk)
 - **Editable Prompts** - Both the copy-generation prompt and the edit-planning prompt are editable in Settings
@@ -283,6 +284,7 @@ npm run dev
    - Cut each clip (burning in captions when enabled), and
    - Stitch the final clip with FFmpeg (mixing in music if provided).
 6. When it finishes, review the per-clip breakdown and click **Reveal final video** to open it in your file browser.
+7. Click **Generate copy** for SEO YouTube title options, a description, tags, and thumbnail-text ideas (built from the final cut's transcript).
 
 Every run is saved. Reopen the modal any time to browse the **history** for that production —
 select a past run to see its script, edit decision list, and activity log; **delete** it (removes
@@ -408,6 +410,7 @@ GET    /api/productions/{id}/edits         - Full edit history (newest first)
 POST   /api/productions/{id}/edit/reveal   - Reveal the latest final video in the file browser
 POST   /api/edits/{edit_id}/reveal         - Reveal a specific run's final video
 POST   /api/edits/{edit_id}/rerender       - Re-render a new version with muted music regions
+POST   /api/edits/{edit_id}/copy           - Generate YouTube copy (titles/description/tags/thumbnail)
 DELETE /api/edits/{edit_id}                - Delete a run (DB row + files on disk)
 GET    /api/browse-folder                  - OS folder picker (output location)
 GET    /api/browse-file                    - OS file picker (background music)

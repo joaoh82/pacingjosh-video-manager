@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { Production, EditJobStatus, ProductionEdit } from '@/lib/types';
+import { Production, EditJobStatus, ProductionEdit, YoutubeCopy } from '@/lib/types';
 import {
   startProductionEdit,
   getEditStatus,
@@ -10,6 +10,7 @@ import {
   revealEditFile,
   deleteEdit,
   rerenderEdit,
+  generateEditCopy,
   browseFolder,
   browseFile,
 } from '@/lib/api';
@@ -665,6 +666,40 @@ function EditDetail({
   const [deleting, setDeleting] = useState(false);
   const clips = edit.edl?.clips ?? [];
 
+  // YouTube copy (titles / description / tags / thumbnail text)
+  const [copy, setCopy] = useState<YoutubeCopy | null>(edit.copy ?? null);
+  const [copyLoading, setCopyLoading] = useState(false);
+  const [copyErr, setCopyErr] = useState<string | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    setCopy(edit.copy ?? null);
+    setCopyErr(null);
+    setCopiedKey(null);
+  }, [edit.id, edit.copy]);
+
+  const toClipboard = (key: string, text: string) => {
+    navigator.clipboard
+      .writeText(text)
+      .then(() => {
+        setCopiedKey(key);
+        setTimeout(() => setCopiedKey(null), 1500);
+      })
+      .catch(() => {});
+  };
+
+  const handleGenerateCopy = async (regenerate: boolean) => {
+    setCopyLoading(true);
+    setCopyErr(null);
+    try {
+      setCopy(await generateEditCopy(edit.id, regenerate));
+    } catch (e: any) {
+      setCopyErr(e.message || 'Failed to generate copy');
+    } finally {
+      setCopyLoading(false);
+    }
+  };
+
   const handleDelete = async () => {
     if (
       !confirm(
@@ -736,6 +771,119 @@ function EditDetail({
           }
           busy={busy}
         />
+      )}
+
+      {/* YouTube copy (completed runs) */}
+      {edit.status === 'completed' && (
+        <div className="card">
+          <div className="flex items-center justify-between gap-3 mb-2">
+            <div>
+              <h3 className="font-semibold text-gray-900 dark:text-white">YouTube copy</h3>
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                Title options, description, tags &amp; thumbnail text from the final cut&apos;s transcript.
+              </p>
+            </div>
+            <button
+              onClick={() => handleGenerateCopy(!!copy)}
+              disabled={copyLoading}
+              className="btn btn-primary text-sm whitespace-nowrap"
+            >
+              {copyLoading ? 'Generating…' : copy ? 'Regenerate' : 'Generate copy'}
+            </button>
+          </div>
+
+          {copyErr && !copyLoading && (
+            <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+              <p className="text-sm text-red-600 dark:text-red-400">{copyErr}</p>
+            </div>
+          )}
+
+          {!copy && !copyLoading && !copyErr && (
+            <p className="text-sm text-gray-500 dark:text-gray-400 italic">
+              No copy yet. Click “Generate copy” for SEO titles, a description, tags and thumbnail
+              text ideas.
+            </p>
+          )}
+
+          {copy && !copyLoading && (
+            <div className="space-y-4">
+              {copy.titles.length > 0 && (
+                <div>
+                  <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Title options</span>
+                  <ul className="mt-2 space-y-2">
+                    {copy.titles.map((t, i) => (
+                      <li key={i} className="flex items-center justify-between gap-2 bg-gray-50 dark:bg-gray-700/50 rounded px-3 py-2">
+                        <span className="text-sm text-gray-900 dark:text-white">{t}</span>
+                        <button
+                          onClick={() => toClipboard(`title-${i}`, t)}
+                          className="text-xs text-primary-600 dark:text-primary-400 hover:underline whitespace-nowrap"
+                        >
+                          {copiedKey === `title-${i}` ? 'Copied!' : 'Copy'}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {copy.description && (
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Description</span>
+                    <button
+                      onClick={() => toClipboard('desc', copy.description)}
+                      className="text-xs text-primary-600 dark:text-primary-400 hover:underline"
+                    >
+                      {copiedKey === 'desc' ? 'Copied!' : 'Copy'}
+                    </button>
+                  </div>
+                  <p className="text-sm text-gray-900 dark:text-white whitespace-pre-wrap bg-gray-50 dark:bg-gray-700/50 rounded px-3 py-2">
+                    {copy.description}
+                  </p>
+                </div>
+              )}
+
+              {copy.thumbnail_texts.length > 0 && (
+                <div>
+                  <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Thumbnail text ideas</span>
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    {copy.thumbnail_texts.map((t, i) => (
+                      <button
+                        key={i}
+                        onClick={() => toClipboard(`thumb-${i}`, t)}
+                        className="badge badge-primary text-xs"
+                        title="Click to copy"
+                      >
+                        {copiedKey === `thumb-${i}` ? 'Copied!' : t}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {copy.tags.length > 0 && (
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Tags</span>
+                    <button
+                      onClick={() => toClipboard('tags', copy.tags.join(', '))}
+                      className="text-xs text-primary-600 dark:text-primary-400 hover:underline"
+                    >
+                      {copiedKey === 'tags' ? 'Copied!' : 'Copy all'}
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {copy.tags.map((t, i) => (
+                      <span key={i} className="badge bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-200 text-xs">
+                        {t}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       )}
 
       {/* Script (collapsible) */}

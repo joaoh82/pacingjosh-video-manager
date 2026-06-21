@@ -24,6 +24,7 @@ pub struct ProductionEdit {
     pub logs: Option<String>,
     pub transcripts_json: Option<String>,
     pub options_json: Option<String>,
+    pub copy_json: Option<String>,
 }
 
 #[derive(Debug, Insertable)]
@@ -63,6 +64,8 @@ pub struct ProductionEditResponse {
     pub text_provider: Option<String>,
     pub text_model: Option<String>,
     pub created_at: NaiveDateTime,
+    /// Generated YouTube copy (titles / description / tags / thumbnail text).
+    pub copy: Option<serde_json::Value>,
 }
 
 impl From<ProductionEdit> for ProductionEditResponse {
@@ -76,6 +79,10 @@ impl From<ProductionEdit> for ProductionEditResponse {
             .as_deref()
             .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
             .unwrap_or_default();
+        let copy = e
+            .copy_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
         Self {
             id: e.id,
             production_id: e.production_id,
@@ -91,6 +98,7 @@ impl From<ProductionEdit> for ProductionEditResponse {
             text_provider: e.text_provider,
             text_model: e.text_model,
             created_at: e.created_at,
+            copy,
         }
     }
 }

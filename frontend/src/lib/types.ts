@@ -219,6 +219,14 @@ export interface EditJobStatus {
   end_time?: string | null;
 }
 
+/** Generated long-form YouTube copy for a finished run. */
+export interface YoutubeCopy {
+  titles: string[];
+  description: string;
+  tags: string[];
+  thumbnail_texts: string[];
+}
+
 /** A persisted edit result for a production. */
 export interface ProductionEdit {
   id: number;
@@ -235,6 +243,8 @@ export interface ProductionEdit {
   text_provider?: string | null;
   text_model?: string | null;
   created_at: string;
+  /** Generated YouTube copy, if any. */
+  copy?: YoutubeCopy | null;
 }
 
 /** Payload for starting an edit pipeline run. */

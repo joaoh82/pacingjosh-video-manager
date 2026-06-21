@@ -277,6 +277,53 @@ pub async fn generate_content(
     Ok(content)
 }
 
+/// YouTube copy for a long-form video: title options, description, tags, and
+/// thumbnail text ideas.
+#[derive(Debug, Deserialize, serde::Serialize, Default, Clone)]
+pub struct YoutubeCopy {
+    #[serde(default)]
+    pub titles: Vec<String>,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub thumbnail_texts: Vec<String>,
+}
+
+/// Generate long-form YouTube copy (3 SEO titles, a description, tags, and
+/// thumbnail text ideas) from the final video's transcript.
+pub async fn generate_youtube_copy(transcript: &str, ai: &AiSettings) -> Result<YoutubeCopy, String> {
+    let prompt = format!(
+        "You are a YouTube growth & SEO copywriter for LONG-FORM videos. Based ONLY on the \
+following video transcript, write copy that maximizes click-through and watch time while staying \
+accurate to the content.\n\n\
+Return STRICT JSON (no markdown, no commentary) with exactly these keys:\n\
+- \"titles\": array of 3 distinct, SEO-optimized YouTube title options (each at most ~70 \
+characters; compelling but not misleading)\n\
+- \"description\": a YouTube description — a strong first line/hook, then a short keyword-rich \
+summary paragraph, then a few relevant hashtags on the last line\n\
+- \"tags\": array of UP TO 20 SEO keyword tags (plain keywords/phrases, no leading #)\n\
+- \"thumbnail_texts\": array of 3 short, punchy on-screen thumbnail text ideas (max ~5 words each)\n\n\
+Do not invent facts that aren't supported by the transcript.\n\n\
+TRANSCRIPT:\n\"\"\"\n{}\n\"\"\"",
+        transcript
+    );
+
+    let raw = complete(&prompt, ai, 2048).await?;
+    let json = extract_json(&raw);
+    let mut copy: YoutubeCopy = serde_json::from_str(json)
+        .map_err(|e| format!("Failed to parse copy JSON: {} — raw: {}", e, raw))?;
+
+    copy.titles.truncate(3);
+    copy.thumbnail_texts.truncate(5);
+    copy.tags.truncate(25);
+    if copy.titles.is_empty() && copy.description.trim().is_empty() {
+        return Err("The model returned empty copy.".to_string());
+    }
+    Ok(copy)
+}
+
 /// Run a single JSON-mode completion against the configured text provider and
 /// return the raw response text. Shared by social-copy generation and the
 /// video-edit planning step.
