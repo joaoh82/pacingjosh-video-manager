@@ -249,4 +249,8 @@ export interface StartEditPayload {
   music_duck_volume?: number;
   /** Only swell the music in pauses longer than this many seconds. */
   music_min_gap?: number;
+  /** Remove long silences/filler within clips (tighten the cut). */
+  tighten?: boolean;
+  /** When tightening, cut silence/filler gaps longer than this many seconds. */
+  tighten_gap?: number;
 }

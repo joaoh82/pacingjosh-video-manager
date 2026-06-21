@@ -174,6 +174,11 @@ pub struct EditOptions {
     /// shorter pauses (thinking/breaths) stay ducked so the music doesn't pop in
     /// and out mid-sentence.
     pub music_min_gap: f32,
+    /// Tighten the cut: within each chosen clip, drop long silences and filler
+    /// ("um"/"uh") by splitting it into sub-clips of the actual speech.
+    pub tighten: bool,
+    /// When tightening, remove silence/filler gaps longer than this many seconds.
+    pub tighten_gap: f32,
 }
 
 /// Start a background edit pipeline for a production. Returns the job id used to
@@ -423,6 +428,43 @@ fn run_edit_inner(
     }
     log_msg(edit_map, job_id, &format!("Planned {} clip(s) across the timeline.", resolved.len()));
 
+    // Optionally tighten the cut: split each clip into sub-clips of actual speech,
+    // dropping internal silences/filler longer than `tighten_gap`. The resulting
+    // `cut_list` is the real cut and drives everything downstream (segments,
+    // timeline, music ducking) so the final video and the preview stay in sync.
+    let cut_list: Vec<ResolvedClipInternal> = if opts.tighten {
+        let before = resolved.len();
+        let expanded: Vec<ResolvedClipInternal> = resolved
+            .iter()
+            .flat_map(|c| {
+                let words = transcripts.get(&c.video_id).map(|w| w.as_slice()).unwrap_or(&[]);
+                clip_keep_segments(words, c.start, c.end, opts.tighten_gap)
+                    .into_iter()
+                    .map(|(s, e)| ResolvedClipInternal {
+                        video_id: c.video_id,
+                        filename: c.filename.clone(),
+                        file_path: c.file_path.clone(),
+                        start: s,
+                        end: e,
+                        reason: c.reason.clone(),
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        if expanded.is_empty() {
+            resolved.clone()
+        } else {
+            log_msg(
+                edit_map,
+                job_id,
+                &format!("Tightened {} clip(s) into {} (removed long pauses/filler).", before, expanded.len()),
+            );
+            expanded
+        }
+    } else {
+        resolved.clone()
+    };
+
     // The final video and its EDL JSON share a basename and live side by side in
     // the production's output folder.
     let stem = output_stem(opts.output_name.as_deref(), production_title, job_id);
@@ -443,7 +485,7 @@ fn run_edit_inner(
     // Speech intervals on the final timeline — drive both the timeline's voice
     // track and the (deterministic) music ducking. Pauses shorter than
     // `music_min_gap` stay part of speech so the music doesn't swell mid-sentence.
-    let speech_timeline = timeline_speech_intervals(&resolved, &transcripts, opts.music_min_gap);
+    let speech_timeline = timeline_speech_intervals(&cut_list, &transcripts, opts.music_min_gap);
 
     // Build the EDL JSON deliverable, plus a timeline (clips laid end-to-end +
     // speech intervals + music levels) for the editor-style preview.
@@ -451,25 +493,25 @@ fn run_edit_inner(
         production_id,
         production_title,
         ai,
-        &resolved,
+        &cut_list,
         &output_path,
         opts.captions,
         music_name.as_deref(),
     );
-    edl_value["timeline"] = build_timeline(&resolved, &speech_timeline, opts, music_name.as_deref());
+    edl_value["timeline"] = build_timeline(&cut_list, &speech_timeline, opts, music_name.as_deref());
     let pretty = serde_json::to_string_pretty(&edl_value).unwrap_or_else(|_| "{}".to_string());
     std::fs::write(&edl_path, &pretty).map_err(|e| format!("Failed to write EDL JSON: {}", e))?;
     log_msg(edit_map, job_id, &format!("Wrote edit decision list to {}", edl_path.display()));
 
     // --- Stage 3: stitch the clips with ffmpeg -----------------------------
-    let (target_w, target_h, target_fps) = resolve_target_spec(&resolved, takes);
+    let (target_w, target_h, target_fps) = resolve_target_spec(&cut_list, takes);
     set_stage(
         edit_map,
         job_id,
         "stitching",
         &format!(
             "Cutting {} clip(s) at {}x{} {:.0}fps{}…",
-            resolved.len(),
+            cut_list.len(),
             target_w,
             target_h,
             target_fps,
@@ -477,7 +519,7 @@ fn run_edit_inner(
         ),
     );
     update(edit_map, job_id, |p| {
-        p.total = resolved.len() as i64;
+        p.total = cut_list.len() as i64;
         p.processed = 0;
     });
 
@@ -485,12 +527,12 @@ fn run_edit_inner(
     let work_dir = out_dir.join(format!(".work-{}", job_id));
     std::fs::create_dir_all(&work_dir).map_err(|e| format!("Failed to create work dir: {}", e))?;
 
-    let mut segments: Vec<PathBuf> = Vec::with_capacity(resolved.len());
-    for (i, clip) in resolved.iter().enumerate() {
+    let mut segments: Vec<PathBuf> = Vec::with_capacity(cut_list.len());
+    for (i, clip) in cut_list.iter().enumerate() {
         log_msg(
             edit_map,
             job_id,
-            &format!("Cutting clip {}/{}: {} [{:.2}s–{:.2}s]", i + 1, resolved.len(), clip.filename, clip.start, clip.end),
+            &format!("Cutting clip {}/{}: {} [{:.2}s–{:.2}s]", i + 1, cut_list.len(), clip.filename, clip.start, clip.end),
         );
 
         // Build per-clip captions (re-timed to the segment) when enabled and the
@@ -909,6 +951,70 @@ fn speech_intervals(words: &[TranscriptWord], clip_start: f32, clip_end: f32, ga
         if let Some(last) = out.last_mut() {
             if s - last.1 <= gap {
                 last.1 = last.1.max(e);
+                continue;
+            }
+        }
+        out.push((s, e));
+    }
+    out
+}
+
+/// Non-lexical filler sounds to drop when tightening (compared after lowercasing
+/// and stripping punctuation). Conservative — only clear disfluencies, never real
+/// words like "like"/"so" whose removal would change meaning.
+fn is_filler(text: &str) -> bool {
+    let t: String = text.trim().to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect();
+    matches!(
+        t.as_str(),
+        "um" | "umm" | "uh" | "uhh" | "uhm" | "erm" | "er" | "hmm" | "hm" | "mmm" | "mm" | "mhm" | "uhhuh" | "huh"
+    )
+}
+
+/// Split a clip into the speech-only sub-ranges to keep, dropping internal
+/// silences and filler runs longer than `gap` seconds. Real speech (non-filler
+/// words) within `gap` of each other stays as one run; longer gaps become cut
+/// points. Each kept run is padded slightly so word onsets/tails aren't clipped.
+/// Returns the whole clip unchanged when there are no word timestamps.
+fn clip_keep_segments(words: &[TranscriptWord], clip_start: f32, clip_end: f32, gap: f32) -> Vec<(f32, f32)> {
+    let gap = gap.clamp(0.3, 10.0);
+    const LEAD: f32 = 0.10;
+    const TAIL: f32 = 0.20;
+
+    let content: Vec<(f32, f32)> = words
+        .iter()
+        .filter(|w| w.end > clip_start && w.start < clip_end && !is_filler(&w.text))
+        .map(|w| (w.start.clamp(clip_start, clip_end), w.end.clamp(clip_start, clip_end)))
+        .filter(|(s, e)| e > s)
+        .collect();
+
+    if content.is_empty() {
+        return vec![(clip_start, clip_end)];
+    }
+
+    // Merge content words separated by less than `gap` into one run.
+    let mut runs: Vec<(f32, f32)> = Vec::new();
+    for (s, e) in content {
+        if let Some(last) = runs.last_mut() {
+            if s - last.1 < gap {
+                if e > last.1 {
+                    last.1 = e;
+                }
+                continue;
+            }
+        }
+        runs.push((s, e));
+    }
+
+    // Pad each run and merge any overlaps the padding introduces.
+    let mut out: Vec<(f32, f32)> = Vec::new();
+    for (s, e) in runs {
+        let s = (s - LEAD).max(clip_start);
+        let e = (e + TAIL).min(clip_end);
+        if let Some(last) = out.last_mut() {
+            if s <= last.1 {
+                if e > last.1 {
+                    last.1 = e;
+                }
                 continue;
             }
         }

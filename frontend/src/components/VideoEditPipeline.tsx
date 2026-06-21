@@ -66,6 +66,8 @@ export default function VideoEditPipeline({
   const [outputDir, setOutputDir] = useState('');
   const [outputName, setOutputName] = useState('');
   const [captions, setCaptions] = useState(true);
+  const [tighten, setTighten] = useState(false);
+  const [tightenGap, setTightenGap] = useState(1.5);
   const [musicPath, setMusicPath] = useState('');
   const [musicVolume, setMusicVolume] = useState(0.3);
   const [musicDuckVolume, setMusicDuckVolume] = useState(0.08);
@@ -113,6 +115,8 @@ export default function VideoEditPipeline({
       setOutputDir('');
       setOutputName('');
       setCaptions(true);
+      setTighten(false);
+      setTightenGap(1.5);
       setMusicPath('');
       setMusicVolume(0.3);
       setMusicDuckVolume(0.08);
@@ -182,6 +186,8 @@ export default function VideoEditPipeline({
         output_dir: outputDir.trim() || undefined,
         output_name: outputName.trim() || undefined,
         captions,
+        tighten,
+        tighten_gap: tightenGap,
         music_path: musicPath.trim() || undefined,
         music_volume: musicVolume,
         music_duck_volume: musicDuckVolume,
@@ -463,6 +469,49 @@ export default function VideoEditPipeline({
                       Burn in captions from the spoken words
                     </span>
                   </label>
+
+                  {/* Tighten — remove dead air & filler */}
+                  <div>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={tighten}
+                        onChange={(e) => setTighten(e.target.checked)}
+                        disabled={running}
+                        className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                      />
+                      <span className="text-sm text-gray-700 dark:text-gray-300">
+                        Tighten the cut — remove long pauses &amp; “um/uh” within clips
+                      </span>
+                    </label>
+                    {tighten && (
+                      <div className="mt-2 ml-6">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                            Cut silent/filler gaps longer than
+                          </span>
+                          <input
+                            type="number"
+                            min={0.3}
+                            max={10}
+                            step={0.1}
+                            value={tightenGap}
+                            onChange={(e) =>
+                              setTightenGap(Math.max(0.3, Math.min(10, parseFloat(e.target.value) || 0.3)))
+                            }
+                            disabled={running}
+                            className="input w-16 text-sm py-1"
+                          />
+                          <span className="text-xs text-gray-500 dark:text-gray-400">s</span>
+                        </div>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                          A clip with a long pause/filler is split into separate sub-clips that skip
+                          it, so the final cut is tighter. Needs word-level timestamps
+                          (ElevenLabs/Whisper).
+                        </p>
+                      </div>
+                    )}
+                  </div>
 
                   {/* Music */}
                   <div>

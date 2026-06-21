@@ -10,6 +10,7 @@ fn default_captions() -> bool { true }
 fn default_music_volume() -> f32 { 0.3 }
 fn default_music_duck_volume() -> f32 { 0.08 }
 fn default_music_min_gap() -> f32 { 1.5 }
+fn default_tighten_gap() -> f32 { 1.5 }
 
 #[derive(Deserialize)]
 pub struct StartEditRequest {
@@ -40,6 +41,12 @@ pub struct StartEditRequest {
     /// Only swell the music back up in pauses longer than this many seconds.
     #[serde(default = "default_music_min_gap")]
     pub music_min_gap: f32,
+    /// Tighten the cut by removing long silences/filler within each clip.
+    #[serde(default)]
+    pub tighten: bool,
+    /// When tightening, remove silence/filler gaps longer than this many seconds.
+    #[serde(default = "default_tighten_gap")]
+    pub tighten_gap: f32,
 }
 
 /// Kick off the edit pipeline for a production. Returns a job id to poll.
@@ -64,6 +71,8 @@ async fn start_edit(
         music_volume: body.music_volume,
         music_duck_volume: body.music_duck_volume,
         music_min_gap: body.music_min_gap,
+        tighten: body.tighten,
+        tighten_gap: body.tighten_gap,
     };
 
     match edit_service::start_edit(
