@@ -384,22 +384,39 @@ async fn restyle_gemini(image_jpeg: &[u8], prompt: &str, ai: &AiSettings) -> Res
         }
     }
 
-    // No image came back — surface why, as clearly as the API allows.
+    // No image came back — surface why, as clearly as the API allows. A STOP
+    // finish with a text part is the model replying in words (often a soft
+    // refusal); include that text so the reason is visible.
+    let mut returned_text = String::new();
+    if let Some(parts) = parsed["candidates"][0]["content"]["parts"].as_array() {
+        for p in parts {
+            if let Some(t) = p["text"].as_str() {
+                if !returned_text.is_empty() {
+                    returned_text.push(' ');
+                }
+                returned_text.push_str(t.trim());
+            }
+        }
+    }
     let finish = parsed["candidates"][0]["finishReason"].as_str().unwrap_or("");
     let detail = parsed["candidates"][0]["finishMessage"]
         .as_str()
         .or_else(|| parsed["promptFeedback"]["blockReason"].as_str())
-        .unwrap_or("");
+        .filter(|s| !s.is_empty())
+        .unwrap_or(returned_text.as_str());
+
     let mut err = String::from("Gemini didn't return an image");
     if !finish.is_empty() {
         err.push_str(&format!(" ({})", finish));
     }
-    if !detail.is_empty() {
-        err.push_str(&format!(": {}", detail));
+    if !detail.trim().is_empty() {
+        err.push_str(&format!(": {}", truncate_err(detail.trim())));
     }
     err.push_str(
-        ". Note: Gemini's image model often refuses to restyle close-up shots of real, \
-identifiable faces — try a wider frame, or a prompt focused on the background and lighting.",
+        ". This usually means the model declined to edit a real, identifiable face, or the \
+selected model isn't an image model. Try: (1) OpenAI gpt-image-2 in Settings (often edits \
+photos more permissively); (2) a wider frame where the face isn't the focus; or (3) keep AI \
+off and use the real frame + text overlay.",
     );
     Err(err)
 }
