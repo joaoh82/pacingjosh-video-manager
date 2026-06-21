@@ -1,20 +1,33 @@
+<p align="center">
+  <img src="images/Logo.png" alt="Video Log Manager" width="520" />
+</p>
 
+<p align="center">
+  <b>Index. Search. Edit your video library — with AI.</b><br/>
+  A local-first desktop app for indexing, searching, tagging, and AI-editing large video collections.<br/>
+  Built for runners, content creators, and anyone managing thousands of videos locally.
+</p>
 
+<p align="center">
+  <img alt="Rust" src="https://img.shields.io/badge/Rust-CE412B?logo=rust&logoColor=white" />
+  <img alt="Actix-web" src="https://img.shields.io/badge/Actix--web-1B1B1B?logo=rust&logoColor=white" />
+  <img alt="Tauri" src="https://img.shields.io/badge/Tauri-24C8DB?logo=tauri&logoColor=black" />
+  <img alt="Next.js" src="https://img.shields.io/badge/Next.js-000000?logo=nextdotjs&logoColor=white" />
+  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white" />
+  <img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-3b82f6" />
+</p>
 
+<p align="center">
+  <a href="images/demo.mp4">
+    <img src="images/demo.gif" alt="Video Log Manager — demo" width="100%" />
+  </a>
+  <br/>
+  <sub><i>▶ Click the GIF to watch the full-quality MP4 walkthrough</i></sub>
+</p>
 
-A modern, full-stack video indexing and management application for organizing and browsing large video collections. Built for runners, content creators, and anyone managing thousands of videos locally.
-
-Created to help manage my own videos for my Youtube Channel [Pacing Josh](https://www.youtube.com/@pacingjosh)
-
-Rust
-Actix-web
-Next.js
-TypeScript
-License
-
-
-
-Video Log Manager
+<p align="center">
+  <i>Created to help manage my own videos for my YouTube channel <a href="https://www.youtube.com/@pacingjosh">Pacing Josh</a></i>
+</p>
 
 ## Features
 
@@ -323,32 +336,32 @@ app's data directory.
 
 ### Main Screen
 
-Main Screen
+![Main Screen](images/main-screen.png)
 *Browse your video collection with thumbnails, tags, and production badges*
 
 ### Video Grid
 
-Video Grid
+![Video Grid](images/video-grid.png)
 *Video cards show duration, resolution, file size, tags, and linked productions*
 
 ### Video Player Modal
 
-Video Player
+![Video Player Modal](images/video-modal.png)
 *Watch videos and edit metadata in a sleek modal interface*
 
 ### Production Manager
 
-Productions
+![Production Manager](images/production.png)
 *Create and manage productions with platform, link, and publish status*
 
 ### Scanning Progress
 
-Scanning
+![Scanning Progress](images/scanning.png)
 *Real-time scanning progress with ETA and per-file status*
 
 ### Settings Page
 
-Settings
+![Settings Page](images/settings.png)
 *Configure video directory and thumbnail preferences*
 
 ## Configuration
@@ -507,7 +520,8 @@ pacingjosh-video-manager/
 │   ├── fetch-ffmpeg.sh         # Download FFmpeg sidecars (macOS/Linux)
 │   └── fetch-ffmpeg.ps1        # Download FFmpeg sidecars (Windows)
 ├── backend/                    # [DEPRECATED] Python/FastAPI backend
-└── images/                     # Screenshots & branding
+├── remotion-demo/              # Remotion project that renders the README demo (mp4 + gif)
+└── images/                     # Screenshots, branding & rendered demo (demo.mp4 / demo.gif)
 ```
 
 ## Troubleshooting
