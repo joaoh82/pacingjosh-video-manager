@@ -410,23 +410,24 @@ pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps={fps}",
 
 /// Mix a background-music track under an existing video's audio and write the
 /// result to `out_path`, with **two explicit levels**: the looped music sits at
-/// `full_volume` when no one is speaking and drops to `duck_volume` while the
-/// voice is talking.
+/// `full_volume` when no one is speaking and at `duck_volume` while the voice is
+/// talking.
 ///
-/// The two levels are exact rather than a vague compressor ratio: the music is
-/// split into a constant floor at `duck_volume` plus a "swing" layer at
-/// `full_volume - duck_volume`. The voice keys a sidechain compressor that slams
-/// the swing layer to ~0 during speech (so music ≈ floor = `duck_volume`) and
-/// leaves it untouched in pauses (so music ≈ floor + swing = `full_volume`).
-/// `level_sc` boosts the detector so even quietly-recorded speech triggers it,
-/// and the fast attack ducks from the very first word. The voice is mixed back
-/// at full level and a limiter guards against clipping; the video stream is
-/// copied untouched. Returns an error (with ffmpeg stderr) on failure.
+/// Ducking is driven by the KNOWN speech intervals (from the transcript word
+/// timestamps), not by audio-level sidechain detection. This is deterministic
+/// and independent of how loud/quiet the speech was recorded — and a
+/// `duck_volume` of 0 truly silences the music during speech. The music's gain
+/// is automated with a `volume` expression that returns `duck_volume` inside any
+/// speech interval and `full_volume` everywhere else. The voice is mixed back at
+/// full level and a limiter guards against clipping; the video stream is copied
+/// untouched. `speech` is a list of (start, end) intervals in seconds on the
+/// final timeline. Returns an error (with ffmpeg stderr) on failure.
 pub fn add_background_music(
     video: &Path,
     music: &Path,
     full_volume: f32,
     duck_volume: f32,
+    speech: &[(f32, f32)],
     out_path: &Path,
 ) -> Result<(), String> {
     if let Some(parent) = out_path.parent() {
@@ -434,19 +435,24 @@ pub fn add_background_music(
     }
     let full = full_volume.clamp(0.0, 1.0);
     let duck = duck_volume.clamp(0.0, full);
-    let swing = (full - duck).max(0.0);
+
+    // Gain = duck inside any speech interval, full otherwise. `between()` returns
+    // 1 within [s,e]; summing them is nonzero (→ true) during speech.
+    let cond = speech
+        .iter()
+        .filter(|(s, e)| e > s)
+        .map(|(s, e)| format!("between(t,{:.3},{:.3})", s, e))
+        .collect::<Vec<_>>()
+        .join("+");
+    let cond = if cond.is_empty() { "0".to_string() } else { cond };
+    let vol_expr = format!("if({},{:.4},{:.4})", cond, duck, full);
 
     let filter = format!(
-        "[1:a]aformat=channel_layouts=stereo:sample_rates=48000,asplit=2[m1][m2];\
-[m1]volume={swing:.3}[bgfull];\
-[m2]volume={duck:.3}[bgfloor];\
-[0:a]aformat=channel_layouts=stereo:sample_rates=48000,asplit=2[voice][trigger];\
-[bgfull][trigger]sidechaincompress=threshold=0.03:ratio=20:attack=5:release=250:makeup=1:level_sc=4[bgducked];\
-[bgducked][bgfloor]amix=inputs=2:duration=longest:normalize=0[music];\
+        "[1:a]aformat=channel_layouts=stereo:sample_rates=48000,volume='{}':eval=frame[music];\
+[0:a]aformat=channel_layouts=stereo:sample_rates=48000[voice];\
 [voice][music]amix=inputs=2:duration=first:normalize=0[mixed];\
 [mixed]alimiter=limit=0.95[aout]",
-        swing = swing,
-        duck = duck
+        vol_expr
     );
 
     let output = ffmpeg_cmd()

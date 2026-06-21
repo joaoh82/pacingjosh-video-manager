@@ -221,7 +221,7 @@ export default function VideoEditPipeline({
       <div className="fixed inset-0 bg-black bg-opacity-50 transition-opacity" onClick={onClose} />
 
       <div className="flex min-h-full items-center justify-center p-4">
-        <div className="relative w-full max-w-5xl bg-white dark:bg-gray-800 rounded-lg shadow-xl overflow-hidden">
+        <div className="relative w-[96vw] max-w-[1700px] bg-white dark:bg-gray-800 rounded-lg shadow-xl overflow-hidden">
           {/* Header */}
           <div className="flex items-center justify-between p-4 border-b dark:border-gray-700">
             <div className="min-w-0">
@@ -243,9 +243,9 @@ export default function VideoEditPipeline({
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 max-h-[78vh]">
+          <div className="grid grid-cols-1 md:grid-cols-3 max-h-[88vh]">
             {/* History sidebar */}
-            <aside className="md:col-span-1 border-b md:border-b-0 md:border-r dark:border-gray-700 overflow-y-auto max-h-[30vh] md:max-h-[78vh]">
+            <aside className="md:col-span-1 border-b md:border-b-0 md:border-r dark:border-gray-700 overflow-y-auto max-h-[30vh] md:max-h-[88vh]">
               <div className="p-3">
                 <button
                   onClick={() => {
@@ -305,7 +305,7 @@ export default function VideoEditPipeline({
             </aside>
 
             {/* Main panel */}
-            <main className="md:col-span-2 overflow-y-auto max-h-[48vh] md:max-h-[78vh] p-4 space-y-4">
+            <main className="md:col-span-2 overflow-y-auto max-h-[55vh] md:max-h-[88vh] p-4 space-y-4">
               {/* Live progress (shown whenever a job is running/finishing) */}
               {status && (
                 <div className="card space-y-3">

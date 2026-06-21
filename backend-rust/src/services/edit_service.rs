@@ -436,6 +436,10 @@ fn run_edit_inner(
         .and_then(|p| p.file_name())
         .map(|f| f.to_string_lossy().to_string());
 
+    // Speech intervals on the final timeline — drive both the timeline's voice
+    // track and the (deterministic) music ducking.
+    let speech_timeline = timeline_speech_intervals(&resolved, &transcripts);
+
     // Build the EDL JSON deliverable, plus a timeline (clips laid end-to-end +
     // speech intervals + music levels) for the editor-style preview.
     let mut edl_value = build_edl_json(
@@ -447,7 +451,7 @@ fn run_edit_inner(
         opts.captions,
         music_name.as_deref(),
     );
-    edl_value["timeline"] = build_timeline(&resolved, &transcripts, opts, music_name.as_deref());
+    edl_value["timeline"] = build_timeline(&resolved, &speech_timeline, opts, music_name.as_deref());
     let pretty = serde_json::to_string_pretty(&edl_value).unwrap_or_else(|_| "{}".to_string());
     std::fs::write(&edl_path, &pretty).map_err(|e| format!("Failed to write EDL JSON: {}", e))?;
     log_msg(edit_map, job_id, &format!("Wrote edit decision list to {}", edl_path.display()));
@@ -532,7 +536,7 @@ fn run_edit_inner(
                 (opts.music_duck_volume * 100.0).round()
             ),
         );
-        match ffmpeg_service::add_background_music(&concat_tmp, music, opts.music_volume, opts.music_duck_volume, &output_path) {
+        match ffmpeg_service::add_background_music(&concat_tmp, music, opts.music_volume, opts.music_duck_volume, &speech_timeline, &output_path) {
             Ok(()) => log_msg(edit_map, job_id, "Mixed in background music."),
             Err(e) => {
                 warn!("[edit {}] background music failed: {}", job_id, e);
@@ -813,14 +817,12 @@ fn build_edl_json(
 /// visualize where the music ducks), the total duration, and the music levels.
 fn build_timeline(
     resolved: &[ResolvedClipInternal],
-    transcripts: &HashMap<i32, Vec<TranscriptWord>>,
+    speech: &[(f32, f32)],
     opts: &EditOptions,
     music_name: Option<&str>,
 ) -> serde_json::Value {
     let mut clips = Vec::new();
-    let mut speech = Vec::new();
     let mut cursor = 0.0f32;
-
     for (i, c) in resolved.iter().enumerate() {
         let dur = (c.end - c.start).max(0.0);
         let tstart = cursor;
@@ -834,17 +836,13 @@ fn build_timeline(
             "source_start": round2(c.start),
             "source_end": round2(c.end),
         }));
-
-        if let Some(words) = transcripts.get(&c.video_id) {
-            for (s, e) in speech_intervals(words, c.start, c.end, 0.4) {
-                speech.push(serde_json::json!({
-                    "start": round2((s - c.start) + tstart),
-                    "end": round2((e - c.start) + tstart),
-                }));
-            }
-        }
         cursor = tend;
     }
+
+    let speech_json: Vec<serde_json::Value> = speech
+        .iter()
+        .map(|(s, e)| serde_json::json!({ "start": round2(*s), "end": round2(*e) }))
+        .collect();
 
     let music_present = opts
         .music_path
@@ -856,7 +854,7 @@ fn build_timeline(
     serde_json::json!({
         "duration": round2(cursor),
         "clips": clips,
-        "speech": speech,
+        "speech": speech_json,
         "music": {
             "present": music_present,
             "name": music_name,
@@ -864,6 +862,29 @@ fn build_timeline(
             "duck_volume": opts.music_duck_volume.min(opts.music_volume),
         },
     })
+}
+
+/// Speech intervals (start, end seconds) on the FINAL timeline: each clip's
+/// words mapped onto its position in the assembled video. Used both to draw the
+/// timeline's voice track and to drive the music ducking. Words within ~0.8s
+/// join into one interval so the music doesn't pop up during tiny gaps.
+fn timeline_speech_intervals(
+    resolved: &[ResolvedClipInternal],
+    transcripts: &HashMap<i32, Vec<TranscriptWord>>,
+) -> Vec<(f32, f32)> {
+    let mut out = Vec::new();
+    let mut cursor = 0.0f32;
+    for c in resolved {
+        let dur = (c.end - c.start).max(0.0);
+        let tstart = cursor;
+        if let Some(words) = transcripts.get(&c.video_id) {
+            for (s, e) in speech_intervals(words, c.start, c.end, 0.8) {
+                out.push(((s - c.start) + tstart, (e - c.start) + tstart));
+            }
+        }
+        cursor += dur;
+    }
+    out
 }
 
 /// Merge a take's words into contiguous speech intervals (words closer than
