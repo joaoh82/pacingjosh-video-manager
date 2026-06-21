@@ -364,20 +364,38 @@ pub async fn restyle_image(image_jpeg: &[u8], prompt: &str, ai: &AiSettings) -> 
 
     let parsed: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| format!("Bad Gemini response: {}", e))?;
-    let parts = parsed["candidates"][0]["content"]["parts"]
-        .as_array()
-        .ok_or_else(|| format!("Gemini returned no image: {}", truncate_err(&text)))?;
-    for p in parts {
-        let data = p["inline_data"]["data"]
-            .as_str()
-            .or_else(|| p["inlineData"]["data"].as_str());
-        if let Some(b64) = data {
-            return STANDARD
-                .decode(b64)
-                .map_err(|e| format!("Failed to decode generated image: {}", e));
+
+    if let Some(parts) = parsed["candidates"][0]["content"]["parts"].as_array() {
+        for p in parts {
+            let data = p["inline_data"]["data"]
+                .as_str()
+                .or_else(|| p["inlineData"]["data"].as_str());
+            if let Some(b64) = data {
+                return STANDARD
+                    .decode(b64)
+                    .map_err(|e| format!("Failed to decode generated image: {}", e));
+            }
         }
     }
-    Err(format!("Gemini did not return an image: {}", truncate_err(&text)))
+
+    // No image came back — surface why, as clearly as the API allows.
+    let finish = parsed["candidates"][0]["finishReason"].as_str().unwrap_or("");
+    let detail = parsed["candidates"][0]["finishMessage"]
+        .as_str()
+        .or_else(|| parsed["promptFeedback"]["blockReason"].as_str())
+        .unwrap_or("");
+    let mut err = String::from("Gemini didn't return an image");
+    if !finish.is_empty() {
+        err.push_str(&format!(" ({})", finish));
+    }
+    if !detail.is_empty() {
+        err.push_str(&format!(": {}", detail));
+    }
+    err.push_str(
+        ". Note: Gemini's image model often refuses to restyle close-up shots of real, \
+identifiable faces — try a wider frame, or a prompt focused on the background and lighting.",
+    );
+    Err(err)
 }
 
 fn truncate_err(s: &str) -> String {

@@ -51,6 +51,9 @@ export default function ThumbnailEditor({ editId, duration, suggestedTexts }: Th
   const [uppercase, setUppercase] = useState(true);
 
   const [restyling, setRestyling] = useState(false);
+  const [restylePrompt, setRestylePrompt] = useState(
+    'Enhance this into a punchy YouTube thumbnail: richer contrast and saturation, cinematic color grade, sharper detail, brighter highlights. Keep the subject and composition unchanged. No text.'
+  );
   const [saving, setSaving] = useState(false);
   const [savedPath, setSavedPath] = useState<string | null>(null);
 
@@ -130,7 +133,7 @@ export default function ThumbnailEditor({ editId, duration, suggestedTexts }: Th
     setRestyling(true);
     setError(null);
     try {
-      await loadFrame(() => restyleEditFrame(editId, t));
+      await loadFrame(() => restyleEditFrame(editId, t, restylePrompt));
     } catch (e: any) {
       setError(e.message || 'AI restyle failed');
     } finally {
@@ -207,6 +210,22 @@ export default function ThumbnailEditor({ editId, duration, suggestedTexts }: Th
           {restyling ? 'Restyling…' : '✨ AI restyle'}
         </button>
       </div>
+
+      {/* AI restyle prompt (optional) */}
+      <details className="text-xs text-gray-500 dark:text-gray-400">
+        <summary className="cursor-pointer select-none">✨ AI restyle prompt (optional)</summary>
+        <textarea
+          value={restylePrompt}
+          onChange={(e) => setRestylePrompt(e.target.value)}
+          rows={2}
+          className="input text-sm mt-2"
+          placeholder="How to restyle the frame (focus on background/lighting)."
+        />
+        <p className="mt-1">
+          Tip: Gemini often refuses close-up shots of real faces. A wider frame or a
+          background/lighting-focused prompt works best.
+        </p>
+      </details>
 
       {/* Text */}
       <textarea
