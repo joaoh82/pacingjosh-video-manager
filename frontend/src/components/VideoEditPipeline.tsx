@@ -69,6 +69,7 @@ export default function VideoEditPipeline({
   const [musicPath, setMusicPath] = useState('');
   const [musicVolume, setMusicVolume] = useState(0.3);
   const [musicDuckVolume, setMusicDuckVolume] = useState(0.08);
+  const [musicMinGap, setMusicMinGap] = useState(1.5);
 
   // Run state
   const [jobId, setJobId] = useState<string | null>(null);
@@ -115,6 +116,7 @@ export default function VideoEditPipeline({
       setMusicPath('');
       setMusicVolume(0.3);
       setMusicDuckVolume(0.08);
+      setMusicMinGap(1.5);
       setSelectedId(null);
       setView('new');
       loadHistory(production.id, true);
@@ -183,6 +185,7 @@ export default function VideoEditPipeline({
         music_path: musicPath.trim() || undefined,
         music_volume: musicVolume,
         music_duck_volume: musicDuckVolume,
+        music_min_gap: musicMinGap,
       });
       setJobId(res.job_id);
     } catch (e: any) {
@@ -528,9 +531,28 @@ export default function VideoEditPipeline({
                             clear
                           </button>
                         </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                            Only bring music back in pauses longer than
+                          </span>
+                          <input
+                            type="number"
+                            min={0.3}
+                            max={10}
+                            step={0.1}
+                            value={musicMinGap}
+                            onChange={(e) =>
+                              setMusicMinGap(Math.max(0.3, Math.min(10, parseFloat(e.target.value) || 0.3)))
+                            }
+                            disabled={running}
+                            className="input w-16 text-sm py-1"
+                          />
+                          <span className="text-xs text-gray-500 dark:text-gray-400">s</span>
+                        </div>
                         <p className="text-xs text-gray-500 dark:text-gray-400">
-                          The music plays at the first level in pauses and automatically drops to the
-                          second level while you&apos;re speaking.
+                          The music plays at the first level in pauses and drops to the second level
+                          while you&apos;re speaking. Short thinking pauses (under the value above) stay
+                          ducked so the music doesn&apos;t pop in mid-sentence.
                         </p>
                       </div>
                     )}

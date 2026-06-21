@@ -274,7 +274,7 @@ npm run dev
 4. Set:
    - **Output folder** (required) — a subfolder named after the production is created inside it, holding the final video and its EDL JSON. Optionally set the **filename**.
    - **Burn in captions** (on by default) to overlay the spoken words,
-   - **Background music** — browse for a track and set two volumes (one for pauses, a lower one for while talking); it loops under the speech and ducks between the two levels automatically.
+   - **Background music** — browse for a track and set two volumes (one for pauses, a lower one for while talking); it loops under the speech and ducks between the two levels automatically. A "bring music back after pauses longer than N seconds" control keeps short thinking pauses ducked so the music doesn't pop in mid-sentence.
 5. Click **Run pipeline**. The app will, in order:
    - Transcribe every take with word-level timestamps,
    - Ask the configured LLM to assemble the best cut from your script,

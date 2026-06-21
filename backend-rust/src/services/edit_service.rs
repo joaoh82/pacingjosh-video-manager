@@ -170,6 +170,10 @@ pub struct EditOptions {
     pub music_volume: f32,
     /// Music volume while the voice is talking, 0.0–1.0 (ducked level).
     pub music_duck_volume: f32,
+    /// Only let the music swell back up in pauses LONGER than this many seconds;
+    /// shorter pauses (thinking/breaths) stay ducked so the music doesn't pop in
+    /// and out mid-sentence.
+    pub music_min_gap: f32,
 }
 
 /// Start a background edit pipeline for a production. Returns the job id used to
@@ -437,8 +441,9 @@ fn run_edit_inner(
         .map(|f| f.to_string_lossy().to_string());
 
     // Speech intervals on the final timeline — drive both the timeline's voice
-    // track and the (deterministic) music ducking.
-    let speech_timeline = timeline_speech_intervals(&resolved, &transcripts);
+    // track and the (deterministic) music ducking. Pauses shorter than
+    // `music_min_gap` stay part of speech so the music doesn't swell mid-sentence.
+    let speech_timeline = timeline_speech_intervals(&resolved, &transcripts, opts.music_min_gap);
 
     // Build the EDL JSON deliverable, plus a timeline (clips laid end-to-end +
     // speech intervals + music levels) for the editor-style preview.
@@ -871,14 +876,18 @@ fn build_timeline(
 fn timeline_speech_intervals(
     resolved: &[ResolvedClipInternal],
     transcripts: &HashMap<i32, Vec<TranscriptWord>>,
+    min_gap: f32,
 ) -> Vec<(f32, f32)> {
+    // Clamp to a sane range; words within `gap` seconds of each other count as
+    // one continuous speech run (so short pauses don't bring the music back).
+    let gap = min_gap.clamp(0.2, 10.0);
     let mut out = Vec::new();
     let mut cursor = 0.0f32;
     for c in resolved {
         let dur = (c.end - c.start).max(0.0);
         let tstart = cursor;
         if let Some(words) = transcripts.get(&c.video_id) {
-            for (s, e) in speech_intervals(words, c.start, c.end, 0.8) {
+            for (s, e) in speech_intervals(words, c.start, c.end, gap) {
                 out.push(((s - c.start) + tstart, (e - c.start) + tstart));
             }
         }

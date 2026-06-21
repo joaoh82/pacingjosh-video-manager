@@ -247,4 +247,6 @@ export interface StartEditPayload {
   music_volume?: number;
   /** Music volume while the voice is talking — the ducked level (0.0–1.0). */
   music_duck_volume?: number;
+  /** Only swell the music in pauses longer than this many seconds. */
+  music_min_gap?: number;
 }
