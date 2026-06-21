@@ -2,7 +2,7 @@ use actix_web::{get, post, put, web, HttpResponse};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-use crate::config::{default_system_prompt, ConfigManager};
+use crate::config::{default_edit_prompt, default_system_prompt, ConfigManager};
 use crate::db::DbPool;
 use crate::models::AiGenerationResponse;
 use crate::services::{ai_service, ffmpeg_service, video_service};
@@ -17,11 +17,16 @@ async fn get_ai_settings(config: web::Data<ConfigManager>) -> HttpResponse {
         "text_model": ai.text_model,
         "transcription_provider": ai.transcription_provider,
         "transcription_model": ai.transcription_model,
+        "image_provider": ai.image_provider,
+        "image_model": ai.image_model,
         "gemini_api_key_set": key_set(&ai.gemini_api_key),
         "openai_api_key_set": key_set(&ai.openai_api_key),
         "anthropic_api_key_set": key_set(&ai.anthropic_api_key),
+        "elevenlabs_api_key_set": key_set(&ai.elevenlabs_api_key),
         "system_prompt": ai.system_prompt,
         "default_system_prompt": default_system_prompt(),
+        "edit_prompt": ai.edit_prompt,
+        "default_edit_prompt": default_edit_prompt(),
     }))
 }
 
@@ -35,13 +40,19 @@ pub struct AiSettingsRequest {
     pub text_model: Option<String>,
     pub transcription_provider: Option<String>,
     pub transcription_model: Option<String>,
+    pub image_provider: Option<String>,
+    pub image_model: Option<String>,
     /// Blank or omitted leaves the stored key unchanged.
     pub gemini_api_key: Option<String>,
     pub openai_api_key: Option<String>,
     pub anthropic_api_key: Option<String>,
+    pub elevenlabs_api_key: Option<String>,
     /// Copy-generation prompt. Omitted leaves it unchanged; an empty string
     /// resets it to the built-in default.
     pub system_prompt: Option<String>,
+    /// Video-edit planning prompt. Omitted leaves it unchanged; an empty string
+    /// resets it to the built-in default.
+    pub edit_prompt: Option<String>,
 }
 
 #[put("/ai/settings")]
@@ -55,16 +66,26 @@ async fn save_ai_settings(
     if let Some(v) = &body.text_model { ai.text_model = v.clone(); }
     if let Some(v) = &body.transcription_provider { ai.transcription_provider = v.clone(); }
     if let Some(v) = &body.transcription_model { ai.transcription_model = v.clone(); }
+    if let Some(v) = &body.image_provider { ai.image_provider = v.clone(); }
+    if let Some(v) = &body.image_model { ai.image_model = v.clone(); }
 
     // Keys are write-only: only overwrite when a non-empty value is supplied.
     update_key(&mut ai.gemini_api_key, &body.gemini_api_key);
     update_key(&mut ai.openai_api_key, &body.openai_api_key);
     update_key(&mut ai.anthropic_api_key, &body.anthropic_api_key);
+    update_key(&mut ai.elevenlabs_api_key, &body.elevenlabs_api_key);
 
     // An empty/whitespace prompt resets to the default; otherwise store as given.
     if let Some(p) = &body.system_prompt {
         ai.system_prompt = if p.trim().is_empty() {
             default_system_prompt()
+        } else {
+            p.clone()
+        };
+    }
+    if let Some(p) = &body.edit_prompt {
+        ai.edit_prompt = if p.trim().is_empty() {
+            default_edit_prompt()
         } else {
             p.clone()
         };

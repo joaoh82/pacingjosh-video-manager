@@ -1,6 +1,8 @@
 //! AI content generation: audio transcription and SEO copy generation for
-//! portrait/shorts videos. Providers: Gemini, OpenAI, Anthropic. API keys and
-//! model selections come from `AiSettings` (persisted in config.json).
+//! portrait/shorts videos, plus the LLM planning step for the video-edit
+//! pipeline. Transcription providers: ElevenLabs, OpenAI, Gemini. Text/LLM
+//! providers: Gemini, OpenAI, Anthropic. API keys and model selections come
+//! from `AiSettings` (persisted in config.json).
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use chrono::Utc;
@@ -17,6 +19,23 @@ use crate::schema::ai_generations;
 const GEMINI_BASE: &str = "https://generativelanguage.googleapis.com/v1beta/models";
 const OPENAI_BASE: &str = "https://api.openai.com/v1";
 const ANTHROPIC_BASE: &str = "https://api.anthropic.com/v1";
+const ELEVENLABS_BASE: &str = "https://api.elevenlabs.io/v1";
+
+/// A single transcribed word with its start/end offset (seconds) in the source.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TranscriptWord {
+    pub text: String,
+    pub start: f32,
+    pub end: f32,
+}
+
+/// A transcript with optional word-level timing. `words` is empty when the
+/// provider does not return timestamps (e.g. Gemini).
+#[derive(Debug, Clone, serde::Serialize, Default)]
+pub struct TimedTranscript {
+    pub text: String,
+    pub words: Vec<TranscriptWord>,
+}
 
 /// Structured copy returned by the text model.
 #[derive(Debug, Deserialize, Default, Clone)]
@@ -45,16 +64,92 @@ fn client() -> reqwest::Client {
 
 /// Transcribe an audio file using the configured transcription provider.
 pub async fn transcribe(audio_path: &Path, ai: &AiSettings) -> Result<String, String> {
+    Ok(transcribe_timed(audio_path, ai).await?.text)
+}
+
+/// Transcribe an audio file, returning word-level timestamps when the provider
+/// supports them. ElevenLabs (Scribe) and OpenAI return word timings; Gemini
+/// returns plain text only (the `words` vec is left empty).
+pub async fn transcribe_timed(audio_path: &Path, ai: &AiSettings) -> Result<TimedTranscript, String> {
     let bytes = std::fs::read(audio_path).map_err(|e| format!("Failed to read audio: {}", e))?;
 
     match ai.transcription_provider.as_str() {
+        "elevenlabs" => transcribe_elevenlabs(bytes, ai).await,
         "openai" => transcribe_openai(bytes, ai).await,
-        "gemini" => transcribe_gemini(bytes, ai).await,
+        "gemini" => transcribe_gemini(bytes, ai).await.map(|text| TimedTranscript { text, words: vec![] }),
         other => Err(format!("Unsupported transcription provider: {}", other)),
     }
 }
 
-async fn transcribe_openai(bytes: Vec<u8>, ai: &AiSettings) -> Result<String, String> {
+/// ElevenLabs Scribe speech-to-text. Returns the full transcript plus
+/// word-level timestamps. See https://elevenlabs.io/docs/api-reference/speech-to-text/convert
+async fn transcribe_elevenlabs(bytes: Vec<u8>, ai: &AiSettings) -> Result<TimedTranscript, String> {
+    let key = ai
+        .elevenlabs_api_key
+        .as_deref()
+        .filter(|k| !k.is_empty())
+        .ok_or("ElevenLabs API key is not configured")?;
+
+    // Default to the current Scribe model when none is configured.
+    let model = if ai.transcription_model.trim().is_empty() {
+        "scribe_v1"
+    } else {
+        ai.transcription_model.as_str()
+    };
+
+    let part = reqwest::multipart::Part::bytes(bytes)
+        .file_name("audio.mp3")
+        .mime_str("audio/mpeg")
+        .map_err(|e| e.to_string())?;
+    let form = reqwest::multipart::Form::new()
+        .text("model_id", model.to_string())
+        .text("timestamps_granularity", "word")
+        .part("file", part);
+
+    let resp = client()
+        .post(format!("{}/speech-to-text", ELEVENLABS_BASE))
+        .header("xi-api-key", key)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("ElevenLabs request failed: {}", e))?;
+
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("ElevenLabs transcription error ({}): {}", status, text));
+    }
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("Bad ElevenLabs response: {}", e))?;
+
+    let full_text = parsed["text"].as_str().unwrap_or_default().trim().to_string();
+
+    // Keep only spoken words (drop "spacing" and "audio_event" entries).
+    let words: Vec<TranscriptWord> = parsed["words"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter(|w| w["type"].as_str().unwrap_or("word") == "word")
+                .filter_map(|w| {
+                    Some(TranscriptWord {
+                        text: w["text"].as_str()?.to_string(),
+                        start: w["start"].as_f64()? as f32,
+                        end: w["end"].as_f64()? as f32,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if full_text.is_empty() && words.is_empty() {
+        return Err("ElevenLabs returned an empty transcript".to_string());
+    }
+
+    Ok(TimedTranscript { text: full_text, words })
+}
+
+async fn transcribe_openai(bytes: Vec<u8>, ai: &AiSettings) -> Result<TimedTranscript, String> {
     let key = ai
         .openai_api_key
         .as_deref()
@@ -65,8 +160,13 @@ async fn transcribe_openai(bytes: Vec<u8>, ai: &AiSettings) -> Result<String, St
         .file_name("audio.mp3")
         .mime_str("audio/mpeg")
         .map_err(|e| e.to_string())?;
+    // Ask for verbose JSON with word-level timestamps so the edit pipeline can
+    // choose precise cut points. (Whisper-class models support this; gpt-4o
+    // transcribe models ignore the extra fields and still return `text`.)
     let form = reqwest::multipart::Form::new()
         .text("model", ai.transcription_model.clone())
+        .text("response_format", "verbose_json")
+        .text("timestamp_granularities[]", "word")
         .part("file", part);
 
     let resp = client()
@@ -85,11 +185,28 @@ async fn transcribe_openai(bytes: Vec<u8>, ai: &AiSettings) -> Result<String, St
 
     let parsed: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| format!("Bad OpenAI response: {}", e))?;
-    parsed["text"]
-        .as_str()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| "OpenAI returned an empty transcript".to_string())
+
+    let full_text = parsed["text"].as_str().unwrap_or_default().trim().to_string();
+    let words: Vec<TranscriptWord> = parsed["words"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|w| {
+                    Some(TranscriptWord {
+                        text: w["word"].as_str()?.to_string(),
+                        start: w["start"].as_f64()? as f32,
+                        end: w["end"].as_f64()? as f32,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if full_text.is_empty() && words.is_empty() {
+        return Err("OpenAI returned an empty transcript".to_string());
+    }
+
+    Ok(TimedTranscript { text: full_text, words })
 }
 
 async fn transcribe_gemini(bytes: Vec<u8>, ai: &AiSettings) -> Result<String, String> {
@@ -148,12 +265,7 @@ pub async fn generate_content(
     ai: &AiSettings,
 ) -> Result<GeneratedContent, String> {
     let prompt = build_prompt(&ai.system_prompt, transcript);
-    let raw = match ai.text_provider.as_str() {
-        "gemini" => generate_gemini(&prompt, ai).await?,
-        "openai" => generate_openai(&prompt, ai).await?,
-        "anthropic" => generate_anthropic(&prompt, ai).await?,
-        other => return Err(format!("Unsupported text provider: {}", other)),
-    };
+    let raw = complete(&prompt, ai, 1024).await?;
 
     let json = extract_json(&raw);
     let mut content: GeneratedContent =
@@ -163,6 +275,212 @@ pub async fn generate_content(
     content.hashtags.truncate(5);
     content.youtube_short_tags.truncate(15);
     Ok(content)
+}
+
+/// YouTube copy for a long-form video: title options, description, tags, and
+/// thumbnail text ideas.
+#[derive(Debug, Deserialize, serde::Serialize, Default, Clone)]
+pub struct YoutubeCopy {
+    #[serde(default)]
+    pub titles: Vec<String>,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub thumbnail_texts: Vec<String>,
+}
+
+/// Generate long-form YouTube copy (3 SEO titles, a description, tags, and
+/// thumbnail text ideas) from the final video's transcript.
+pub async fn generate_youtube_copy(transcript: &str, ai: &AiSettings) -> Result<YoutubeCopy, String> {
+    let prompt = format!(
+        "You are a YouTube growth & SEO copywriter for LONG-FORM videos. Based ONLY on the \
+following video transcript, write copy that maximizes click-through and watch time while staying \
+accurate to the content.\n\n\
+Return STRICT JSON (no markdown, no commentary) with exactly these keys:\n\
+- \"titles\": array of 3 distinct, SEO-optimized YouTube title options (each at most ~70 \
+characters; compelling but not misleading)\n\
+- \"description\": a YouTube description — a strong first line/hook, then a short keyword-rich \
+summary paragraph, then a few relevant hashtags on the last line\n\
+- \"tags\": array of UP TO 20 SEO keyword tags (plain keywords/phrases, no leading #)\n\
+- \"thumbnail_texts\": array of 3 short, punchy on-screen thumbnail text ideas (max ~5 words each)\n\n\
+Do not invent facts that aren't supported by the transcript.\n\n\
+TRANSCRIPT:\n\"\"\"\n{}\n\"\"\"",
+        transcript
+    );
+
+    let raw = complete(&prompt, ai, 2048).await?;
+    let json = extract_json(&raw);
+    let mut copy: YoutubeCopy = serde_json::from_str(json)
+        .map_err(|e| format!("Failed to parse copy JSON: {} — raw: {}", e, raw))?;
+
+    copy.titles.truncate(3);
+    copy.thumbnail_texts.truncate(5);
+    copy.tags.truncate(25);
+    if copy.titles.is_empty() && copy.description.trim().is_empty() {
+        return Err("The model returned empty copy.".to_string());
+    }
+    Ok(copy)
+}
+
+/// Restyle a thumbnail frame with the configured image provider/model: send the
+/// still + a style prompt, get back an edited image (keeping the subject).
+/// Returns image bytes. (Text is added as a real overlay later, not by the model,
+/// so it stays accurate.)
+pub async fn restyle_image(image_jpeg: &[u8], prompt: &str, ai: &AiSettings) -> Result<Vec<u8>, String> {
+    match ai.image_provider.as_str() {
+        "gemini" => restyle_gemini(image_jpeg, prompt, ai).await,
+        "openai" => restyle_openai(image_jpeg, prompt, ai).await,
+        other => Err(format!("Unsupported image provider: {}", other)),
+    }
+}
+
+/// Restyle via Google Gemini's image model (e.g. gemini-2.5-flash-image).
+async fn restyle_gemini(image_jpeg: &[u8], prompt: &str, ai: &AiSettings) -> Result<Vec<u8>, String> {
+    let key = ai
+        .gemini_api_key
+        .as_deref()
+        .filter(|k| !k.is_empty())
+        .ok_or("A Gemini API key is required for AI restyle (add it under Settings → AI / LLM).")?;
+
+    let body = serde_json::json!({
+        "contents": [{
+            "parts": [
+                { "inline_data": { "mime_type": "image/jpeg", "data": STANDARD.encode(image_jpeg) } },
+                { "text": prompt }
+            ]
+        }],
+        "generationConfig": { "responseModalities": ["TEXT", "IMAGE"] }
+    });
+
+    let url = format!("{}/{}:generateContent?key={}", GEMINI_BASE, ai.image_model, key);
+    let resp = client()
+        .post(url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Gemini request failed: {}", e))?;
+
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("Gemini image error ({}): {}", status, truncate_err(&text)));
+    }
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("Bad Gemini response: {}", e))?;
+
+    if let Some(parts) = parsed["candidates"][0]["content"]["parts"].as_array() {
+        for p in parts {
+            let data = p["inline_data"]["data"]
+                .as_str()
+                .or_else(|| p["inlineData"]["data"].as_str());
+            if let Some(b64) = data {
+                return STANDARD
+                    .decode(b64)
+                    .map_err(|e| format!("Failed to decode generated image: {}", e));
+            }
+        }
+    }
+
+    // No image came back — surface why, as clearly as the API allows. A STOP
+    // finish with a text part is the model replying in words (often a soft
+    // refusal); include that text so the reason is visible.
+    let mut returned_text = String::new();
+    if let Some(parts) = parsed["candidates"][0]["content"]["parts"].as_array() {
+        for p in parts {
+            if let Some(t) = p["text"].as_str() {
+                if !returned_text.is_empty() {
+                    returned_text.push(' ');
+                }
+                returned_text.push_str(t.trim());
+            }
+        }
+    }
+    let finish = parsed["candidates"][0]["finishReason"].as_str().unwrap_or("");
+    let detail = parsed["candidates"][0]["finishMessage"]
+        .as_str()
+        .or_else(|| parsed["promptFeedback"]["blockReason"].as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(returned_text.as_str());
+
+    let mut err = String::from("Gemini didn't return an image");
+    if !finish.is_empty() {
+        err.push_str(&format!(" ({})", finish));
+    }
+    if !detail.trim().is_empty() {
+        err.push_str(&format!(": {}", truncate_err(detail.trim())));
+    }
+    err.push_str(
+        ". This usually means the model declined to edit a real, identifiable face, or the \
+selected model isn't an image model. Try: (1) OpenAI gpt-image-2 in Settings (often edits \
+photos more permissively); (2) a wider frame where the face isn't the focus; or (3) keep AI \
+off and use the real frame + text overlay.",
+    );
+    Err(err)
+}
+
+/// Restyle via OpenAI's image edit endpoint (e.g. gpt-image-1 / gpt-image-2).
+async fn restyle_openai(image_jpeg: &[u8], prompt: &str, ai: &AiSettings) -> Result<Vec<u8>, String> {
+    let key = ai
+        .openai_api_key
+        .as_deref()
+        .filter(|k| !k.is_empty())
+        .ok_or("An OpenAI API key is required for AI restyle (add it under Settings → AI / LLM).")?;
+
+    let part = reqwest::multipart::Part::bytes(image_jpeg.to_vec())
+        .file_name("frame.jpg")
+        .mime_str("image/jpeg")
+        .map_err(|e| e.to_string())?;
+    let form = reqwest::multipart::Form::new()
+        .text("model", ai.image_model.clone())
+        .text("prompt", prompt.to_string())
+        .text("size", "1536x1024")
+        .part("image[]", part);
+
+    let resp = client()
+        .post(format!("{}/images/edits", OPENAI_BASE))
+        .bearer_auth(key)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("OpenAI request failed: {}", e))?;
+
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("OpenAI image error ({}): {}", status, truncate_err(&text)));
+    }
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("Bad OpenAI response: {}", e))?;
+    if let Some(b64) = parsed["data"][0]["b64_json"].as_str() {
+        return STANDARD
+            .decode(b64)
+            .map_err(|e| format!("Failed to decode generated image: {}", e));
+    }
+    Err(format!("OpenAI did not return an image: {}", truncate_err(&text)))
+}
+
+fn truncate_err(s: &str) -> String {
+    if s.len() <= 500 {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..500])
+    }
+}
+
+/// Run a single JSON-mode completion against the configured text provider and
+/// return the raw response text. Shared by social-copy generation and the
+/// video-edit planning step.
+pub async fn complete(prompt: &str, ai: &AiSettings, max_tokens: u32) -> Result<String, String> {
+    match ai.text_provider.as_str() {
+        "gemini" => generate_gemini(prompt, ai).await,
+        "openai" => generate_openai(prompt, ai).await,
+        "anthropic" => generate_anthropic(prompt, ai, max_tokens).await,
+        other => Err(format!("Unsupported text provider: {}", other)),
+    }
 }
 
 async fn generate_gemini(prompt: &str, ai: &AiSettings) -> Result<String, String> {
@@ -228,7 +546,7 @@ async fn generate_openai(prompt: &str, ai: &AiSettings) -> Result<String, String
         .ok_or_else(|| "OpenAI returned no content".to_string())
 }
 
-async fn generate_anthropic(prompt: &str, ai: &AiSettings) -> Result<String, String> {
+async fn generate_anthropic(prompt: &str, ai: &AiSettings, max_tokens: u32) -> Result<String, String> {
     let key = ai
         .anthropic_api_key
         .as_deref()
@@ -237,7 +555,7 @@ async fn generate_anthropic(prompt: &str, ai: &AiSettings) -> Result<String, Str
 
     let body = serde_json::json!({
         "model": ai.text_model,
-        "max_tokens": 1024,
+        "max_tokens": max_tokens,
         "messages": [{ "role": "user", "content": prompt }]
     });
 

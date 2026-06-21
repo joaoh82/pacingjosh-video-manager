@@ -71,9 +71,9 @@ diesel migration revert
 Layered architecture: **Routes → Services → Models/Schema**
 
 - **`lib.rs`**: Public `run(BackendPaths) -> async` and `run_blocking(BackendPaths)` entry points. `main.rs` is a thin wrapper that uses CWD-relative `./data`; the Tauri shell calls `run_blocking` with the OS-specific app-data dir.
-- **Routes** (`routes/`): Actix-web handlers — `videos.rs`, `scan.rs`, `tags.rs`, `productions.rs`, `stream.rs`, `config_routes.rs`. All mounted under `/api`.
-- **Services** (`services/`): Business logic — `scanner.rs` (background directory scanning), `ffmpeg_service.rs` (metadata/thumbnails, with injectable `FfmpegPaths` via `set_ffmpeg_paths()`), `video_service.rs`, `search_service.rs`, `production_service.rs`.
-- **Models** (`models/`): Diesel ORM — `video.rs`, `tag.rs`, `production.rs`.
+- **Routes** (`routes/`): Actix-web handlers — `videos.rs`, `scan.rs`, `tags.rs`, `productions.rs`, `stream.rs`, `config_routes.rs`, `ai.rs` (AI settings + per-video copy generation), `edit.rs` (the Edit & Create Video pipeline). All mounted under `/api`.
+- **Services** (`services/`): Business logic — `scanner.rs` (background directory scanning), `ffmpeg_service.rs` (metadata/thumbnails/clip extraction + concat, with injectable `FfmpegPaths` via `set_ffmpeg_paths()`), `video_service.rs`, `search_service.rs`, `production_service.rs`, `ai_service.rs` (transcription incl. ElevenLabs/OpenAI/Gemini + LLM completion), `edit_service.rs` (background edit pipeline orchestration, in-memory `EditJobMap`).
+- **Models** (`models/`): Diesel ORM — `video.rs`, `tag.rs`, `production.rs`, `ai.rs`, `edit.rs`.
 - **Schema** (`schema.rs`): Diesel auto-generated schema from migrations.
 - **Config** (`config.rs`): `ConfigManager::new(app_data_dir)` — all default paths (database, thumbnails, config.json) are rooted at the provided app-data dir.
 - **DB** (`db.rs`): Connection pool setup.
@@ -81,7 +81,7 @@ Layered architecture: **Routes → Services → Models/Schema**
 ### Frontend (frontend/src/)
 
 - **App Router** (`app/`): Pages — main grid (`page.tsx`), setup wizard (`setup/`), settings (`settings/`).
-- **Components** (`components/`): VideoGrid, VideoCard, VideoModal (player + metadata editor), FilterPanel, Scanner (progress polling), ProductionManager, BulkActions.
+- **Components** (`components/`): VideoGrid, VideoCard, VideoModal (player + metadata editor + AI content panel), FilterPanel, Scanner (progress polling), ProductionManager, VideoEditPipeline (the Edit & Create Video modal), EditTimeline (interactive CapCut-style video/voice/music timeline built from `edl.timeline` — zoom/scroll + click music bursts to mute + re-render), ThumbnailEditor (canvas thumbnail builder — frame grab + text overlay + optional Gemini AI restyle), BulkActions.
 - **API Client** (`lib/api.ts`): Centralized typed fetch functions for all backend endpoints.
 - **Types** (`lib/types.ts`): Shared TypeScript interfaces matching backend schemas.
 
@@ -94,11 +94,20 @@ Next.js rewrites `/api/*` requests to `http://localhost:8000/api/*` (configured 
 3. Progress tracked in-memory — not persistent across restarts
 4. Frontend polls `/api/scan/status/{scanId}` every 1 second via the Scanner component
 
+### Key Data Flow: Edit & Create Video pipeline
+1. User adds raw takes to a production, then POSTs a script (+ optional instructions) to `/api/productions/{id}/edit`
+2. `edit_service::start_edit` loads the production's videos, creates a job id in the in-memory `EditJobMap`, and spawns a dedicated OS thread (with its own current-thread Tokio runtime for the async HTTP calls)
+3. The thread runs the stages: extract audio + transcribe each take with word-level timestamps (`ai_service::transcribe_timed`) → build the planning prompt and call the LLM (`ai_service::complete`) → parse/validate the returned EDL against the real takes (clamp ranges to durations) → optionally "tighten" each clip into speech-only sub-clips by dropping long silences/filler (`clip_keep_segments`, driven by word timestamps) → extract a normalized segment per (sub-)clip (burning in per-clip captions re-timed from the transcript when enabled) → concat with FFmpeg → optionally mix in looped background music with two explicit levels — a `music_volume` for pauses and a lower `music_duck_volume` while talking. Ducking is driven by the KNOWN speech intervals (transcript word timestamps mapped onto the final timeline), applied as a `volume` expression on the music — deterministic and independent of recording level, so `0` truly silences music during speech (`ffmpeg_service::add_background_music` takes the speech intervals). All output goes to a per-run version folder `<output_dir>/productions/v<N>/` (N = max existing `v*` + 1, so re-edits never overwrite; the chosen `output_dir` is used verbatim so nothing nests): the final `.mp4`, its `.json` EDL (same basename), and a transient `.work-<job>/` removed on success. **Nothing is written to the app-data directory** — `output_dir` is required. Deleting a run (`DELETE /api/edits/{id}`) removes the DB row and the files, plus the now-empty version folder. The run also persists `transcripts_json` + `options_json` so `POST /api/edits/{id}/rerender` can re-cut a NEW version with extra muted-music regions (from the interactive timeline) without re-transcribing or re-planning — it reuses the saved cut via the shared `assemble_final`. `POST /api/edits/{id}/copy` generates long-form YouTube copy (3 SEO titles, description, tags, thumbnail text) from the final cut's transcript (`final_transcript_for_edit` + `ai_service::generate_youtube_copy`), persisted in the row's `copy_json`. Thumbnail builder: `GET /api/edits/{id}/frame?t=<sec>` returns a 1280x720 still (`ffmpeg_service::extract_frame`); `POST /api/edits/{id}/restyle` AI-restyles that still via the configured image provider/model (`ai_service::restyle_image` dispatches to Gemini `generateContent` or OpenAI `/images/edits`; provider/model set by `AiSettings.image_provider`/`image_model` in Settings, default `gemini`/`gemini-2.5-flash-image`) keeping text out of the image; `POST /api/edits/{id}/thumbnail` saves a finished PNG next to the video. The `ThumbnailEditor` component composites frame + text on an HTML canvas (text stays a real overlay for accuracy) and exports/saves the PNG.
+4. The result (EDL + output path + activity log) is persisted to the `production_edits` table; the frontend polls `/api/edit/status/{job_id}` (~1.5s) via the VideoEditPipeline modal. `EditOptions` carries the per-run inputs (script, instructions, output dir/name, captions flag, music path/volume). On reopen, `/api/productions/{id}/edit` returns the latest result and `/api/productions/{id}/edits` returns the full history (script, EDL, logs per run)
+5. Transcription word timestamps come from ElevenLabs (Scribe) or OpenAI (Whisper); Gemini returns plain text only (no fine cut points). Keys/models/prompts live in `AiSettings` (config.json), set via Settings → AI / LLM
+
 ### Database Schema
 SQLite at `backend-rust/data/database.db`. Key relationships:
 - **Video ↔ Metadata**: 1:1 (cascade delete)
 - **Video ↔ Tag**: Many-to-many via `video_tags` junction table
 - **Video ↔ Production**: Many-to-many via `video_productions` junction table
+- **Video ↔ AiGeneration**: 1:1 (`ai_generations`, cascade delete) — saved transcript + social copy
+- **Production ↔ ProductionEdit**: 1:many (`production_edits`, cascade delete) — persisted edit pipeline runs (EDL JSON + final video path)
 
 ### Video Streaming
 `routes/stream.rs` supports HTTP range requests (206 Partial Content) for seeking — streams file chunks without loading entire video into memory.

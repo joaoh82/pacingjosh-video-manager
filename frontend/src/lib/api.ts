@@ -6,6 +6,10 @@ import type {
   AiSettings,
   AiSettingsUpdate,
   AiGeneration,
+  EditJobStatus,
+  ProductionEdit,
+  StartEditPayload,
+  YoutubeCopy,
 } from './types';
 
 declare global {
@@ -123,6 +127,11 @@ export interface BrowseFolderResponse {
 
 export async function browseFolder(): Promise<BrowseFolderResponse> {
   return fetchApi<BrowseFolderResponse>('/api/browse-folder');
+}
+
+/** Open an OS file picker (used for choosing a background-music track). */
+export async function browseFile(): Promise<BrowseFolderResponse> {
+  return fetchApi<BrowseFolderResponse>('/api/browse-file');
 }
 
 // --- Videos ---
@@ -333,5 +342,135 @@ export async function generateAiContent(
   return fetchApi<AiGeneration>(`/api/ai/generate/${videoId}`, {
     method: 'POST',
     body: JSON.stringify({ regenerate }),
+  });
+}
+
+// --- Video edit pipeline (desktop only) ---
+
+export interface StartEditResponse {
+  status: string;
+  job_id: string;
+  message: string;
+}
+
+/**
+ * Start the "Edit & Create Video" pipeline for a production. Transcribes every
+ * take, asks the LLM to assemble the best cut from the script, then stitches
+ * the final clip with ffmpeg. Returns a job id to poll with getEditStatus.
+ */
+export async function startProductionEdit(
+  productionId: number,
+  data: StartEditPayload
+): Promise<StartEditResponse> {
+  return fetchApi<StartEditResponse>(`/api/productions/${productionId}/edit`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+}
+
+/** Poll live progress for a running (or finished) edit job. */
+export async function getEditStatus(jobId: string): Promise<EditJobStatus> {
+  return fetchApi<EditJobStatus>(`/api/edit/status/${jobId}`);
+}
+
+/** The latest persisted edit result for a production, or null if none. */
+export async function getProductionEdit(
+  productionId: number
+): Promise<ProductionEdit | null> {
+  return fetchApi<ProductionEdit | null>(`/api/productions/${productionId}/edit`);
+}
+
+/** Full edit history for a production (newest first). */
+export async function getProductionEdits(
+  productionId: number
+): Promise<ProductionEdit[]> {
+  return fetchApi<ProductionEdit[]>(`/api/productions/${productionId}/edits`);
+}
+
+/** Reveal the latest final video for a production in the OS file browser. */
+export async function revealEditOutput(productionId: number): Promise<void> {
+  await fetchApi(`/api/productions/${productionId}/edit/reveal`, { method: 'POST' });
+}
+
+/** Reveal a specific run's final video in the OS file browser. */
+export async function revealEditFile(editId: number): Promise<void> {
+  await fetchApi(`/api/edits/${editId}/reveal`, { method: 'POST' });
+}
+
+/** Delete a run: removes its DB row and its files (video, EDL, version folder). */
+export async function deleteEdit(editId: number): Promise<void> {
+  await fetchApi(`/api/edits/${editId}`, { method: 'DELETE' });
+}
+
+/**
+ * Re-render a run into a new version with timeline edits applied — `mute` is the
+ * list of music regions (seconds, final timeline) to remove. Reuses the saved
+ * cut/transcription (no extra cost). Returns a job id to poll with getEditStatus.
+ */
+export async function rerenderEdit(
+  editId: number,
+  mute: { start: number; end: number }[]
+): Promise<StartEditResponse> {
+  return fetchApi<StartEditResponse>(`/api/edits/${editId}/rerender`, {
+    method: 'POST',
+    body: JSON.stringify({ mute }),
+  });
+}
+
+/**
+ * Generate (or fetch cached) long-form YouTube copy — title options,
+ * description, tags, and thumbnail text — from a finished run's transcript.
+ * Pass regenerate=true to force a fresh generation.
+ */
+export async function generateEditCopy(
+  editId: number,
+  regenerate = false
+): Promise<YoutubeCopy> {
+  return fetchApi<YoutubeCopy>(`/api/edits/${editId}/copy`, {
+    method: 'POST',
+    body: JSON.stringify({ regenerate }),
+  });
+}
+
+// --- Thumbnail builder ---
+
+/** Grab a 1280x720 still frame from a run's final video at `t` seconds. */
+export async function fetchEditFrame(editId: number, t: number): Promise<Blob> {
+  const res = await fetch(apiUrl(`/api/edits/${editId}/frame?t=${t}`));
+  if (!res.ok) throw new Error((await res.text()) || 'Failed to grab frame');
+  return res.blob();
+}
+
+/** AI-restyle a still frame via Gemini's image model (requires a Gemini key). */
+export async function restyleEditFrame(
+  editId: number,
+  t: number,
+  prompt?: string
+): Promise<Blob> {
+  const res = await fetch(apiUrl(`/api/edits/${editId}/restyle`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ t, prompt }),
+  });
+  if (!res.ok) {
+    let msg = await res.text();
+    try {
+      msg = JSON.parse(msg).detail ?? msg;
+    } catch {
+      /* keep text */
+    }
+    throw new Error(msg || 'AI restyle failed');
+  }
+  return res.blob();
+}
+
+/** Save a finished thumbnail (base64/data-URL PNG) next to the run's video. */
+export async function saveEditThumbnail(
+  editId: number,
+  imageBase64: string
+): Promise<{ path: string }> {
+  return fetchApi<{ path: string }>(`/api/edits/${editId}/thumbnail`, {
+    method: 'POST',
+    body: JSON.stringify({ image: imageBase64 }),
   });
 }

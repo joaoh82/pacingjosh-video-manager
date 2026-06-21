@@ -47,10 +47,26 @@ fn run_migrations(conn: &mut SqliteConnection) {
         include_str!("../migrations/001_create_tables/up.sql"),
         include_str!("../migrations/002_ai_generations/up.sql"),
         include_str!("../migrations/003_ai_youtube_fields/up.sql"),
+        include_str!("../migrations/004_production_edits/up.sql"),
+        include_str!("../migrations/005_edit_logs/up.sql"),
+        include_str!("../migrations/006_edit_rerender/up.sql"),
+        include_str!("../migrations/007_edit_copy/up.sql"),
     ];
 
     for up_sql in migrations {
-        for statement in up_sql.split(';') {
+        // Strip `--` line comments BEFORE splitting on ';'. A semicolon inside a
+        // comment would otherwise chop a statement in half and silently break the
+        // migration (the leftover comment text becomes invalid SQL).
+        let cleaned: String = up_sql
+            .lines()
+            .map(|line| match line.find("--") {
+                Some(idx) => &line[..idx],
+                None => line,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for statement in cleaned.split(';') {
             let stmt = statement.trim();
             if !stmt.is_empty() {
                 // Ignore errors from "already exists" on re-runs

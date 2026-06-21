@@ -7,7 +7,9 @@ import {
   createProduction,
   updateProduction,
   deleteProduction,
+  isTauri,
 } from '@/lib/api';
+import VideoEditPipeline from './VideoEditPipeline';
 
 const PLATFORM_OPTIONS = ['YouTube', 'TikTok', 'Instagram', 'Facebook', 'Twitter/X', 'Vimeo', 'Other'];
 
@@ -32,6 +34,8 @@ export default function ProductionManager({
   const [formPublished, setFormPublished] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [editingProd, setEditingProd] = useState<Production | null>(null);
+  const showEditPipeline = isTauri();
 
   useEffect(() => {
     if (isOpen) {
@@ -128,6 +132,7 @@ export default function ProductionManager({
   );
 
   return (
+    <>
     <div className="fixed inset-0 z-50 overflow-y-auto">
       {/* Backdrop */}
       <div
@@ -283,6 +288,17 @@ export default function ProductionManager({
                       </span>
                     </div>
                     <div className="flex items-center gap-2 ml-3 flex-shrink-0">
+                      {showEditPipeline && (
+                        <button
+                          onClick={() => setEditingProd(prod)}
+                          className="text-gray-500 hover:text-primary-600 dark:text-gray-400 dark:hover:text-primary-400"
+                          title="Edit & create video from this production's takes"
+                        >
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                          </svg>
+                        </button>
+                      )}
                       <button
                         onClick={() => startEdit(prod)}
                         className="text-gray-500 hover:text-primary-600 dark:text-gray-400 dark:hover:text-primary-400"
@@ -310,5 +326,12 @@ export default function ProductionManager({
         </div>
       </div>
     </div>
+
+    <VideoEditPipeline
+      isOpen={!!editingProd}
+      production={editingProd}
+      onClose={() => setEditingProd(null)}
+    />
+    </>
   );
 }

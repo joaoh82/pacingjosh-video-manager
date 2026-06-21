@@ -77,6 +77,99 @@ async fn browse_folder() -> HttpResponse {
     }
 }
 
+#[get("/browse-file")]
+async fn browse_file() -> HttpResponse {
+    let result = tokio::task::spawn_blocking(open_file_dialog).await;
+
+    match result {
+        Ok(Ok(path)) => HttpResponse::Ok().json(serde_json::json!({
+            "success": true,
+            "path": path,
+        })),
+        Ok(Err(msg)) => HttpResponse::Ok().json(serde_json::json!({
+            "success": false,
+            "message": msg,
+        })),
+        Err(e) => HttpResponse::Ok().json(serde_json::json!({
+            "success": false,
+            "message": format!("Error opening file picker: {}", e),
+        })),
+    }
+}
+
+fn open_file_dialog() -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        let script = r#"
+Add-Type -AssemblyName System.Windows.Forms
+$dialog = New-Object System.Windows.Forms.OpenFileDialog
+$dialog.Title = "Select Background Music"
+$dialog.Filter = "Audio/Video (*.mp3;*.wav;*.m4a;*.aac;*.flac;*.ogg;*.mp4;*.mov)|*.mp3;*.wav;*.m4a;*.aac;*.flac;*.ogg;*.mp4;*.mov|All files (*.*)|*.*"
+$result = $dialog.ShowDialog()
+if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
+    Write-Output $dialog.FileName
+}
+"#;
+        let output = Command::new("powershell")
+            .args(["-NoProfile", "-Command", script])
+            .output()
+            .map_err(|e| format!("Failed to run PowerShell: {}", e))?;
+
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if path.is_empty() {
+            Err("No file selected".to_string())
+        } else {
+            Ok(path)
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        let script = r#"
+try
+    set theFile to choose file with prompt "Select Background Music"
+    return POSIX path of theFile
+on error errMsg
+    return ""
+end try
+"#;
+        let output = Command::new("osascript")
+            .args(["-e", script])
+            .output()
+            .map_err(|e| format!("Failed to run osascript: {}", e))?;
+
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if path.is_empty() {
+            Err("No file selected".to_string())
+        } else {
+            Ok(path)
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        use std::process::Command;
+        let output = Command::new("zenity")
+            .args(["--file-selection", "--title=Select Background Music"])
+            .output()
+            .map_err(|e| format!("Failed to run zenity: {}", e))?;
+
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if path.is_empty() {
+            Err("No file selected".to_string())
+        } else {
+            Ok(path)
+        }
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        Err("File picker not supported on this platform".to_string())
+    }
+}
+
 fn open_folder_dialog() -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
@@ -155,5 +248,6 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(config_options)
         .service(get_config)
         .service(save_config)
-        .service(browse_folder);
+        .service(browse_folder)
+        .service(browse_file);
 }

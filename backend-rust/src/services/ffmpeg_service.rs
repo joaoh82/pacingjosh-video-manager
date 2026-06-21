@@ -51,6 +51,21 @@ fn ffmpeg_cmd() -> Command {
     Command::new(paths.ffmpeg)
 }
 
+/// The resolved ffmpeg binary path plus its version line — surfaced in the
+/// edit pipeline's activity log so it's clear which ffmpeg actually ran
+/// (the bundled sidecar vs. a system PATH ffmpeg that may behave differently).
+pub fn ffmpeg_diagnostics() -> String {
+    let paths = FFMPEG_PATHS.get().cloned().unwrap_or_default();
+    let version = ffmpeg_cmd()
+        .arg("-version")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|s| s.lines().next().map(|l| l.trim().to_string()))
+        .unwrap_or_else(|| "version unknown".to_string());
+    format!("{} — {}", paths.ffmpeg.display(), version)
+}
+
 #[allow(dead_code)]
 /// Check that ffmpeg and ffprobe are available (at the configured paths, or PATH).
 pub fn check_ffmpeg() -> Result<(), String> {
@@ -301,4 +316,257 @@ pub fn extract_audio(video_path: &Path, out_dir: &Path) -> Result<PathBuf, Strin
         Ok(_) => Err(format!("ffmpeg failed to extract audio from {:?}", video_path)),
         Err(e) => Err(format!("Failed to run ffmpeg: {}", e)),
     }
+}
+
+/// Extract a single clip `[start, end)` (seconds) from `input` and normalize it
+/// to a fixed `width`x`height`/`fps`, H.264 + AAC, yuv420p. Normalizing every
+/// segment to the same spec lets the final concat use stream copy.
+///
+/// When `subtitle_name` is set, that subtitle file (an SRT in the same directory
+/// as `out_path`) is burned into the frame. It is passed as a bare filename and
+/// ffmpeg is run with its working directory set to the output folder, which
+/// sidesteps the `subtitles` filter's painful path escaping on Windows.
+///
+/// Returns an error (with the tail of ffmpeg's stderr) on failure.
+pub fn extract_clip_segment(
+    input: &Path,
+    start: f32,
+    end: f32,
+    width: i32,
+    height: i32,
+    fps: f32,
+    out_path: &Path,
+    subtitle_name: Option<&str>,
+) -> Result<(), String> {
+    let duration = end - start;
+    if duration <= 0.0 {
+        return Err(format!("Invalid clip range: start {} >= end {}", start, end));
+    }
+    let parent = out_path.parent().map(|p| p.to_path_buf());
+    if let Some(ref p) = parent {
+        std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
+    }
+
+    // Even dimensions only — libx264/yuv420p requires width and height divisible by 2.
+    let w = (width.max(2) / 2) * 2;
+    let h = (height.max(2) / 2) * 2;
+    let fps = if fps > 0.0 { fps } else { 30.0 };
+
+    let mut vf = format!(
+        "scale={w}:{h}:force_original_aspect_ratio=decrease,\
+pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps={fps}",
+        w = w,
+        h = h,
+        fps = fps
+    );
+    // Burn in captions last so they're sized relative to the final frame.
+    if let Some(name) = subtitle_name {
+        vf.push_str(&format!(
+            ",subtitles={}:force_style='Fontsize=18,Outline=1,Shadow=0,MarginV=40'",
+            name
+        ));
+    }
+
+    let mut cmd = ffmpeg_cmd();
+    // Run from the output directory so the bare subtitle filename resolves.
+    if subtitle_name.is_some() {
+        if let Some(ref p) = parent {
+            cmd.current_dir(p);
+        }
+    }
+    let output = cmd
+        .arg("-i")
+        .arg(input)
+        // Accurate (output-side) seek so cut points match the chosen timestamps.
+        .args(["-ss", &format!("{}", start), "-t", &format!("{}", duration)])
+        .args([
+            "-vf", &vf,
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-crf", "20",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac",
+            "-ar", "48000",
+            "-ac", "2",
+            "-movflags", "+faststart",
+            "-y",
+        ])
+        .arg(out_path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .map_err(|e| format!("Failed to run ffmpeg: {}", e))?;
+
+    if output.status.success() && out_path.exists() {
+        Ok(())
+    } else {
+        Err(format!(
+            "ffmpeg failed to extract clip from {:?}: {}",
+            input,
+            stderr_tail(&output.stderr)
+        ))
+    }
+}
+
+/// Mix a background-music track under an existing video's audio and write the
+/// result to `out_path`, with **two explicit levels**: the looped music sits at
+/// `full_volume` when no one is speaking and at `duck_volume` while the voice is
+/// talking.
+///
+/// Ducking is driven by the KNOWN speech intervals (from the transcript word
+/// timestamps), not by audio-level sidechain detection. This is deterministic
+/// and independent of how loud/quiet the speech was recorded — and a
+/// `duck_volume` of 0 truly silences the music during speech. The music's gain
+/// is automated with a `volume` expression that returns `duck_volume` inside any
+/// speech interval and `full_volume` everywhere else. The voice is mixed back at
+/// full level and a limiter guards against clipping; the video stream is copied
+/// untouched. `speech` is a list of (start, end) intervals in seconds on the
+/// final timeline. Returns an error (with ffmpeg stderr) on failure.
+pub fn add_background_music(
+    video: &Path,
+    music: &Path,
+    full_volume: f32,
+    duck_volume: f32,
+    speech: &[(f32, f32)],
+    out_path: &Path,
+) -> Result<(), String> {
+    if let Some(parent) = out_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let full = full_volume.clamp(0.0, 1.0);
+    let duck = duck_volume.clamp(0.0, full);
+
+    // Gain = duck inside any speech interval, full otherwise. `between()` returns
+    // 1 within [s,e]; summing them is nonzero (→ true) during speech.
+    let cond = speech
+        .iter()
+        .filter(|(s, e)| e > s)
+        .map(|(s, e)| format!("between(t,{:.3},{:.3})", s, e))
+        .collect::<Vec<_>>()
+        .join("+");
+    let cond = if cond.is_empty() { "0".to_string() } else { cond };
+    let vol_expr = format!("if({},{:.4},{:.4})", cond, duck, full);
+
+    let filter = format!(
+        "[1:a]aformat=channel_layouts=stereo:sample_rates=48000,volume='{}':eval=frame[music];\
+[0:a]aformat=channel_layouts=stereo:sample_rates=48000[voice];\
+[voice][music]amix=inputs=2:duration=first:normalize=0[mixed];\
+[mixed]alimiter=limit=0.95[aout]",
+        vol_expr
+    );
+
+    let output = ffmpeg_cmd()
+        .arg("-i")
+        .arg(video)
+        // Loop the music input indefinitely; amix(duration=first) stops at the
+        // video's end.
+        .args(["-stream_loop", "-1"])
+        .arg("-i")
+        .arg(music)
+        .args(["-filter_complex", &filter])
+        .args([
+            "-map", "0:v",
+            "-map", "[aout]",
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-ar", "48000",
+            "-ac", "2",
+            "-movflags", "+faststart",
+            "-y",
+        ])
+        .arg(out_path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .map_err(|e| format!("Failed to run ffmpeg: {}", e))?;
+
+    if output.status.success() && out_path.exists() {
+        Ok(())
+    } else {
+        Err(format!(
+            "ffmpeg failed to add background music: {}",
+            stderr_tail(&output.stderr)
+        ))
+    }
+}
+
+/// Concatenate already-normalized segment files into `out_path` using the
+/// concat demuxer with stream copy. `segments` must share identical codecs and
+/// parameters (guaranteed when produced by `extract_clip_segment`).
+pub fn concat_clips(segments: &[PathBuf], out_path: &Path) -> Result<(), String> {
+    if segments.is_empty() {
+        return Err("No segments to concatenate".to_string());
+    }
+    if let Some(parent) = out_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    // The concat demuxer reads a list file. Use forward slashes so the paths
+    // parse identically on Windows and Unix.
+    let list_path = out_path.with_extension("concat.txt");
+    let mut list = String::new();
+    for seg in segments {
+        let p = seg.to_string_lossy().replace('\\', "/");
+        list.push_str(&format!("file '{}'\n", p));
+    }
+    std::fs::write(&list_path, list).map_err(|e| format!("Failed to write concat list: {}", e))?;
+
+    let output = ffmpeg_cmd()
+        .args(["-f", "concat", "-safe", "0", "-i"])
+        .arg(&list_path)
+        .args(["-c", "copy", "-movflags", "+faststart", "-y"])
+        .arg(out_path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .map_err(|e| format!("Failed to run ffmpeg: {}", e))?;
+
+    let _ = std::fs::remove_file(&list_path);
+
+    if output.status.success() && out_path.exists() {
+        Ok(())
+    } else {
+        Err(format!(
+            "ffmpeg failed to concatenate clips: {}",
+            stderr_tail(&output.stderr)
+        ))
+    }
+}
+
+/// Grab a single still frame from `video` at `t` seconds, scaled/cropped to
+/// cover `width`x`height` (a thumbnail base). Returns the JPEG bytes.
+pub fn extract_frame(video: &Path, t: f32, width: i32, height: i32) -> Result<Vec<u8>, String> {
+    let w = (width.max(2) / 2) * 2;
+    let h = (height.max(2) / 2) * 2;
+    let out = std::env::temp_dir().join(format!("vm-frame-{}.jpg", std::process::id()));
+    let vf = format!(
+        "scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}",
+        w = w,
+        h = h
+    );
+    let output = ffmpeg_cmd()
+        .args(["-ss", &format!("{}", t.max(0.0))])
+        .arg("-i")
+        .arg(video)
+        .args(["-frames:v", "1", "-vf", &vf, "-q:v", "2", "-y"])
+        .arg(&out)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .map_err(|e| format!("Failed to run ffmpeg: {}", e))?;
+
+    if !output.status.success() || !out.exists() {
+        return Err(format!("ffmpeg failed to grab frame: {}", stderr_tail(&output.stderr)));
+    }
+    let bytes = std::fs::read(&out).map_err(|e| format!("Failed to read frame: {}", e))?;
+    let _ = std::fs::remove_file(&out);
+    Ok(bytes)
+}
+
+/// Return the last ~600 chars of captured stderr, for surfacing ffmpeg errors.
+fn stderr_tail(stderr: &[u8]) -> String {
+    let s = String::from_utf8_lossy(stderr);
+    let trimmed = s.trim();
+    let start = trimmed.len().saturating_sub(600);
+    trimmed[start..].to_string()
 }

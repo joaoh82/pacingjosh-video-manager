@@ -40,6 +40,22 @@ Video Log Manager
 - **Platform & Status** - Track platform, publish link, and draft/published status per production
 - **Production Filtering** - Filter the video grid by production to see which clips belong where
 
+### AI & Automated Editing (desktop)
+
+- **Transcription** - Transcribe videos via ElevenLabs (Scribe), OpenAI (Whisper), or Google Gemini
+- **Social Copy Generation** - Generate thumbnail text and Instagram / TikTok / YouTube Short titles, descriptions, tags, and hashtags from a portrait video's transcript
+- **Edit & Create Video Pipeline** - Add raw takes to a production, paste your script, and the app transcribes every take (with word-level timestamps), asks an LLM to assemble the best cut (newest clean takes, re-shoots in timeline order, warm-up "Hey …" intros trimmed), writes an **edit decision list** as JSON, then stitches the final clip with FFmpeg — all tracked with live progress
+- **Burned-in Captions** - Optionally burn the spoken words onto the final video, re-timed per clip from the transcript
+- **Tighten the Cut** - Optionally remove long silences and filler ("um"/"uh") inside clips, splitting each into speech-only sub-clips (jump cuts) for a tighter result
+- **Background Music** - Optionally pick a music track that loops under the speech, with two configurable levels: a volume for when no one is talking and a lower volume for while you're talking. Ducking is driven by the transcript's word timestamps (not audio detection), so it works regardless of how quietly the speech was recorded — and a talking volume of 0% truly silences the music while you speak
+- **Choose Output Location** - Pick the output folder; each run is written to a numbered version subfolder (`productions/v1`, `productions/v2`, …) so re-edits never overwrite each other. The folder you pick stays fixed (no nested production-name folders, nothing in the app's data directory)
+- **YouTube Copy** - One click on a finished run generates 3 SEO-optimized title options, a YouTube description, keyword tags, and thumbnail-text ideas — built from the final cut's transcript and saved with the run
+- **Thumbnail Builder** - Grab a real still frame from the final video (scrub the slider and the preview updates live) and lay stylized text on top in an in-app canvas editor (font size, color, outline, position, CAPS; thumbnail-text suggestions one click away). Export a 1280×720 PNG or save it next to the video. Optional **✨ AI restyle** sends the frame to your chosen image model for a more produced look while the text stays a real overlay. The image **provider & model are configurable** in Settings (Google Gemini or OpenAI GPT Image — e.g. `gpt-image-2`, `gemini-2.5-flash-image`); requires the matching API key
+- **Interactive Timeline** - Each finished run shows an editor-style timeline (like CapCut): a video track with clip thumbnails, a voice track showing where speech is, and a music track whose bar height drops to the ducked level under speech. Zoom/scroll in, click the music "bursts" you don't want, and re-render a new version with them removed — reusing the saved cut and transcription (no extra transcription cost)
+- **Edit History** - Every run is saved per production; reopen the modal to browse past runs, view their script, edit decision list, timeline, and activity log, reveal the final video, or delete a run (removing its database entry and its files from disk)
+- **Editable Prompts** - Both the copy-generation prompt and the edit-planning prompt are editable in Settings
+- **Local Keys** - API keys are stored locally in `config.json` and never returned by the API after saving
+
 ### Advanced Features
 
 - **Metadata Editing** - Edit all metadata inline
@@ -250,6 +266,36 @@ npm run dev
 3. Mark productions as published or draft
 4. Link videos to productions from the video detail modal or via bulk edit
 
+### Creating a Video with the Edit Pipeline (desktop)
+
+> Requires the desktop app, FFmpeg, and AI keys configured under **Settings → AI / LLM**
+> (an ElevenLabs / OpenAI / Gemini transcription key and a Gemini / OpenAI / Anthropic text key).
+
+1. Create a production and add all the raw takes of your video to it (drag them in via bulk edit or the video modal).
+2. Open **Productions**, then click the **🎬 clapperboard** button on that production.
+3. Paste your **script** (Markdown is fine — scene breaks help the editor align takes) and, optionally, extra instructions (e.g. the warm-up phrase to cut, or "I re-shot scene 1 at the end").
+4. Set:
+   - **Output folder** (required) — a subfolder named after the production is created inside it, holding the final video and its EDL JSON. Optionally set the **filename**.
+   - **Burn in captions** (on by default) to overlay the spoken words,
+   - **Background music** — browse for a track and set two volumes (one for pauses, a lower one for while talking); it loops under the speech and ducks between the two levels automatically. A "bring music back after pauses longer than N seconds" control keeps short thinking pauses ducked so the music doesn't pop in mid-sentence.
+5. Click **Run pipeline**. The app will, in order:
+   - Transcribe every take with word-level timestamps,
+   - Ask the configured LLM to assemble the best cut from your script,
+   - Write an **edit decision list** (per-clip `video_id` + time ranges) to JSON,
+   - Cut each clip (burning in captions when enabled), and
+   - Stitch the final clip with FFmpeg (mixing in music if provided).
+6. When it finishes, review the per-clip breakdown and click **Reveal final video** to open it in your file browser.
+7. Click **Generate copy** for SEO YouTube title options, a description, tags, and thumbnail-text ideas (built from the final cut's transcript).
+8. Click **Make thumbnail** to grab a frame, add stylized text (optionally ✨ AI-restyle the frame with Gemini), and **Save to folder** / **Download PNG**.
+
+Every run is saved. Reopen the modal any time to browse the **history** for that production —
+select a past run to see its script, edit decision list, and activity log; **delete** it (removes
+the database entry and the files from disk); or click **＋ New edit** to start another. Output
+files live entirely under your chosen folder, in a numbered version subfolder per run:
+`<output folder>/productions/v<N>/<name>.mp4` and `<name>.json` (the edit decision list).
+Each run gets the next `v<N>`, so re-edits never overwrite each other. Nothing is written to the
+app's data directory.
+
 ### Editing Metadata
 
 **Single Video:**
@@ -351,7 +397,35 @@ GET    /api/stream/{id}             - Stream video
 GET    /api/thumbnails/{id}/{index} - Get thumbnail
 GET    /api/config                  - Get configuration
 PUT    /api/config                  - Update configuration
+
+# AI content generation (desktop)
+GET    /api/ai/settings             - Get AI provider settings (keys are write-only)
+PUT    /api/ai/settings             - Update AI providers, keys, and prompts
+GET    /api/ai/generation/{id}      - Get saved social copy for a video
+POST   /api/ai/generate/{id}        - Transcribe + generate social copy
+
+# Edit & Create Video pipeline (desktop)
+POST   /api/productions/{id}/edit          - Start the edit pipeline (returns job_id)
+GET    /api/edit/status/{job_id}           - Poll live pipeline progress
+GET    /api/productions/{id}/edit          - Latest persisted edit result (EDL + output)
+GET    /api/productions/{id}/edits         - Full edit history (newest first)
+POST   /api/productions/{id}/edit/reveal   - Reveal the latest final video in the file browser
+POST   /api/edits/{edit_id}/reveal         - Reveal a specific run's final video
+POST   /api/edits/{edit_id}/rerender       - Re-render a new version with muted music regions
+POST   /api/edits/{edit_id}/copy           - Generate YouTube copy (titles/description/tags/thumbnail)
+GET    /api/edits/{edit_id}/frame?t=<sec>  - Grab a 1280x720 still frame from the final video
+POST   /api/edits/{edit_id}/restyle        - AI-restyle a frame via Gemini's image model (needs Gemini key)
+POST   /api/edits/{edit_id}/thumbnail      - Save a finished thumbnail PNG next to the video
+DELETE /api/edits/{edit_id}                - Delete a run (DB row + files on disk)
+GET    /api/browse-folder                  - OS folder picker (output location)
+GET    /api/browse-file                    - OS file picker (background music)
 ```
+
+The `POST /api/productions/{id}/edit` body accepts: `script` and `output_dir` (both required),
+plus optional `instructions`, `output_name`, `captions` (default `true`), `music_path`,
+`music_volume` (level when no one is talking, default `0.3`), and `music_duck_volume` (level
+while talking, default `0.08`). `POST /api/edits/{edit_id}/reveal` reveals a specific run's
+final video; `DELETE /api/edits/{edit_id}` removes a run and its files.
 
 ## Database Schema
 
@@ -382,6 +456,20 @@ PUT    /api/config                  - Update configuration
 **video_productions**
 
 - video_id, production_id (junction table)
+
+**ai_generations**
+
+- id, video_id, transcript
+- thumbnail_text, instagram_description, tiktok_description
+- youtube_short_title, youtube_short_description, youtube_short_tags, hashtags
+- provider, model, generated_at
+
+**production_edits**
+
+- id, production_id, status
+- script, instructions, edl_json (the edit decision list), logs (activity log)
+- output_path, edl_path, error
+- transcription_provider, text_provider, text_model, created_at
 
 ## Development
 
