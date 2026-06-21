@@ -324,6 +324,70 @@ TRANSCRIPT:\n\"\"\"\n{}\n\"\"\"",
     Ok(copy)
 }
 
+/// Default Gemini image model ("Nano Banana") for thumbnail restyling.
+const GEMINI_IMAGE_MODEL: &str = "gemini-2.5-flash-image";
+
+/// Restyle a thumbnail frame with Gemini's image model: send the still + a style
+/// prompt, get back an edited image (keeping the subject). Returns image bytes.
+/// Requires a Gemini API key. (Text is added as a real overlay later, not by the
+/// model, so it stays accurate.)
+pub async fn restyle_image(image_jpeg: &[u8], prompt: &str, ai: &AiSettings) -> Result<Vec<u8>, String> {
+    let key = ai
+        .gemini_api_key
+        .as_deref()
+        .filter(|k| !k.is_empty())
+        .ok_or("A Gemini API key is required for AI restyle (add it under Settings → AI / LLM).")?;
+
+    let body = serde_json::json!({
+        "contents": [{
+            "parts": [
+                { "inline_data": { "mime_type": "image/jpeg", "data": STANDARD.encode(image_jpeg) } },
+                { "text": prompt }
+            ]
+        }],
+        "generationConfig": { "responseModalities": ["TEXT", "IMAGE"] }
+    });
+
+    let url = format!("{}/{}:generateContent?key={}", GEMINI_BASE, GEMINI_IMAGE_MODEL, key);
+    let resp = client()
+        .post(url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Gemini request failed: {}", e))?;
+
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("Gemini image error ({}): {}", status, truncate_err(&text)));
+    }
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("Bad Gemini response: {}", e))?;
+    let parts = parsed["candidates"][0]["content"]["parts"]
+        .as_array()
+        .ok_or_else(|| format!("Gemini returned no image: {}", truncate_err(&text)))?;
+    for p in parts {
+        let data = p["inline_data"]["data"]
+            .as_str()
+            .or_else(|| p["inlineData"]["data"].as_str());
+        if let Some(b64) = data {
+            return STANDARD
+                .decode(b64)
+                .map_err(|e| format!("Failed to decode generated image: {}", e));
+        }
+    }
+    Err(format!("Gemini did not return an image: {}", truncate_err(&text)))
+}
+
+fn truncate_err(s: &str) -> String {
+    if s.len() <= 500 {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..500])
+    }
+}
+
 /// Run a single JSON-mode completion against the configured text provider and
 /// return the raw response text. Shared by social-copy generation and the
 /// video-edit planning step.

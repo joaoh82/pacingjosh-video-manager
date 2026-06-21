@@ -1,11 +1,14 @@
 use actix_web::{delete, get, post, web, HttpResponse};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Deserialize;
+use std::path::Path;
 
 use crate::config::ConfigManager;
 use crate::db::DbPool;
 use crate::models::ProductionEditResponse;
 use crate::services::ai_service;
 use crate::services::edit_service::{self, EditJobMap, EditOptions};
+use crate::services::ffmpeg_service;
 
 fn default_captions() -> bool { true }
 fn default_music_volume() -> f32 { 0.3 }
@@ -260,6 +263,122 @@ async fn generate_copy(
     HttpResponse::Ok().json(copy_value)
 }
 
+// --- Thumbnail builder -------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct FrameQuery {
+    pub t: Option<f32>,
+}
+
+/// Resolve a run's final video path if it still exists on disk.
+fn edit_output_path(pool: &DbPool, edit_id: i32) -> Option<String> {
+    let mut conn = pool.get().ok()?;
+    edit_service::get_edit_by_id(&mut conn, edit_id)
+        .and_then(|e| e.output_path)
+        .filter(|p| Path::new(p).exists())
+}
+
+/// Grab a still frame (1280x720 JPEG) from a run's final video at `t` seconds.
+#[get("/edits/{edit_id}/frame")]
+async fn edit_frame(
+    pool: web::Data<DbPool>,
+    path: web::Path<i32>,
+    query: web::Query<FrameQuery>,
+) -> HttpResponse {
+    let edit_id = path.into_inner();
+    let out = match edit_output_path(pool.get_ref(), edit_id) {
+        Some(p) => p,
+        None => return HttpResponse::NotFound().json(serde_json::json!({ "detail": "Final video not found" })),
+    };
+    let t = query.t.unwrap_or(0.0);
+    match web::block(move || ffmpeg_service::extract_frame(Path::new(&out), t, 1280, 720)).await {
+        Ok(Ok(bytes)) => HttpResponse::Ok().content_type("image/jpeg").body(bytes),
+        Ok(Err(e)) => HttpResponse::InternalServerError().json(serde_json::json!({ "detail": e })),
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({ "detail": e.to_string() })),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct RestyleRequest {
+    pub t: Option<f32>,
+    pub prompt: Option<String>,
+}
+
+/// AI-restyle a still frame with Gemini's image model (keeps the subject, no
+/// text). Returns a PNG. Requires a Gemini API key.
+#[post("/edits/{edit_id}/restyle")]
+async fn restyle_frame(
+    pool: web::Data<DbPool>,
+    config: web::Data<ConfigManager>,
+    path: web::Path<i32>,
+    body: web::Json<RestyleRequest>,
+) -> HttpResponse {
+    let edit_id = path.into_inner();
+    let out = match edit_output_path(pool.get_ref(), edit_id) {
+        Some(p) => p,
+        None => return HttpResponse::NotFound().json(serde_json::json!({ "detail": "Final video not found" })),
+    };
+    let t = body.t.unwrap_or(0.0);
+    let frame = match web::block(move || ffmpeg_service::extract_frame(Path::new(&out), t, 1280, 720)).await {
+        Ok(Ok(b)) => b,
+        Ok(Err(e)) => return HttpResponse::InternalServerError().json(serde_json::json!({ "detail": e })),
+        Err(e) => return HttpResponse::InternalServerError().json(serde_json::json!({ "detail": e.to_string() })),
+    };
+    let prompt = body
+        .prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(
+            "Turn this still into a dramatic, eye-catching YouTube thumbnail background. Keep the \
+person and scene clearly recognizable; boost contrast and saturation, cinematic color grade, \
+crisp and vibrant. Do NOT add any text or logos.",
+        )
+        .to_string();
+
+    let ai = config.get_ai_settings();
+    match ai_service::restyle_image(&frame, &prompt, &ai).await {
+        Ok(png) => HttpResponse::Ok().content_type("image/png").body(png),
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({ "detail": e })),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct SaveThumbnailRequest {
+    /// Base64 PNG (optionally a `data:image/png;base64,...` data URL).
+    pub image: String,
+}
+
+/// Save a finished thumbnail PNG next to the run's final video.
+#[post("/edits/{edit_id}/thumbnail")]
+async fn save_thumbnail(
+    pool: web::Data<DbPool>,
+    path: web::Path<i32>,
+    body: web::Json<SaveThumbnailRequest>,
+) -> HttpResponse {
+    let edit_id = path.into_inner();
+    let out = match edit_output_path(pool.get_ref(), edit_id) {
+        Some(p) => p,
+        None => return HttpResponse::NotFound().json(serde_json::json!({ "detail": "Final video not found" })),
+    };
+
+    let b64 = body.image.split(',').last().unwrap_or("").trim();
+    let bytes = match STANDARD.decode(b64) {
+        Ok(b) => b,
+        Err(e) => return HttpResponse::BadRequest().json(serde_json::json!({ "detail": format!("Bad image data: {}", e) })),
+    };
+
+    let out_path = Path::new(&out);
+    let parent = out_path.parent().unwrap_or_else(|| Path::new("."));
+    let stem = out_path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "thumbnail".to_string());
+    let thumb_path = parent.join(format!("{}-thumbnail.png", stem));
+
+    match std::fs::write(&thumb_path, &bytes) {
+        Ok(()) => HttpResponse::Ok().json(serde_json::json!({ "path": thumb_path.to_string_lossy() })),
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({ "detail": format!("Failed to save: {}", e) })),
+    }
+}
+
 /// Delete a run: removes its files from disk (video, EDL JSON, version folder)
 /// and its database row.
 #[delete("/edits/{edit_id}")]
@@ -386,5 +505,8 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         .service(reveal_edit_by_id)
         .service(rerender_edit)
         .service(generate_copy)
+        .service(edit_frame)
+        .service(restyle_frame)
+        .service(save_thumbnail)
         .service(delete_edit);
 }

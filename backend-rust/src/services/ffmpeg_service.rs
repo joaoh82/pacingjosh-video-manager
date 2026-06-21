@@ -533,6 +533,36 @@ pub fn concat_clips(segments: &[PathBuf], out_path: &Path) -> Result<(), String>
     }
 }
 
+/// Grab a single still frame from `video` at `t` seconds, scaled/cropped to
+/// cover `width`x`height` (a thumbnail base). Returns the JPEG bytes.
+pub fn extract_frame(video: &Path, t: f32, width: i32, height: i32) -> Result<Vec<u8>, String> {
+    let w = (width.max(2) / 2) * 2;
+    let h = (height.max(2) / 2) * 2;
+    let out = std::env::temp_dir().join(format!("vm-frame-{}.jpg", std::process::id()));
+    let vf = format!(
+        "scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}",
+        w = w,
+        h = h
+    );
+    let output = ffmpeg_cmd()
+        .args(["-ss", &format!("{}", t.max(0.0))])
+        .arg("-i")
+        .arg(video)
+        .args(["-frames:v", "1", "-vf", &vf, "-q:v", "2", "-y"])
+        .arg(&out)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .map_err(|e| format!("Failed to run ffmpeg: {}", e))?;
+
+    if !output.status.success() || !out.exists() {
+        return Err(format!("ffmpeg failed to grab frame: {}", stderr_tail(&output.stderr)));
+    }
+    let bytes = std::fs::read(&out).map_err(|e| format!("Failed to read frame: {}", e))?;
+    let _ = std::fs::remove_file(&out);
+    Ok(bytes)
+}
+
 /// Return the last ~600 chars of captured stderr, for surfacing ffmpeg errors.
 fn stderr_tail(stderr: &[u8]) -> String {
     let s = String::from_utf8_lossy(stderr);

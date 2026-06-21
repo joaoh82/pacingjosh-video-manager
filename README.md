@@ -50,6 +50,7 @@ Video Log Manager
 - **Background Music** - Optionally pick a music track that loops under the speech, with two configurable levels: a volume for when no one is talking and a lower volume for while you're talking. Ducking is driven by the transcript's word timestamps (not audio detection), so it works regardless of how quietly the speech was recorded — and a talking volume of 0% truly silences the music while you speak
 - **Choose Output Location** - Pick the output folder; each run is written to a numbered version subfolder (`productions/v1`, `productions/v2`, …) so re-edits never overwrite each other. The folder you pick stays fixed (no nested production-name folders, nothing in the app's data directory)
 - **YouTube Copy** - One click on a finished run generates 3 SEO-optimized title options, a YouTube description, keyword tags, and thumbnail-text ideas — built from the final cut's transcript and saved with the run
+- **Thumbnail Builder** - Grab a real still frame from the final video (scrub to the moment you want) and lay stylized text on top in an in-app canvas editor (font size, color, outline, position, CAPS; thumbnail-text suggestions one click away). Export a 1280×720 PNG or save it next to the video. Optional **✨ AI restyle** sends the frame to Gemini's image model for a more produced look while the text stays a real overlay (requires a Gemini API key)
 - **Interactive Timeline** - Each finished run shows an editor-style timeline (like CapCut): a video track with clip thumbnails, a voice track showing where speech is, and a music track whose bar height drops to the ducked level under speech. Zoom/scroll in, click the music "bursts" you don't want, and re-render a new version with them removed — reusing the saved cut and transcription (no extra transcription cost)
 - **Edit History** - Every run is saved per production; reopen the modal to browse past runs, view their script, edit decision list, timeline, and activity log, reveal the final video, or delete a run (removing its database entry and its files from disk)
 - **Editable Prompts** - Both the copy-generation prompt and the edit-planning prompt are editable in Settings
@@ -285,6 +286,7 @@ npm run dev
    - Stitch the final clip with FFmpeg (mixing in music if provided).
 6. When it finishes, review the per-clip breakdown and click **Reveal final video** to open it in your file browser.
 7. Click **Generate copy** for SEO YouTube title options, a description, tags, and thumbnail-text ideas (built from the final cut's transcript).
+8. Click **Make thumbnail** to grab a frame, add stylized text (optionally ✨ AI-restyle the frame with Gemini), and **Save to folder** / **Download PNG**.
 
 Every run is saved. Reopen the modal any time to browse the **history** for that production —
 select a past run to see its script, edit decision list, and activity log; **delete** it (removes
@@ -411,6 +413,9 @@ POST   /api/productions/{id}/edit/reveal   - Reveal the latest final video in th
 POST   /api/edits/{edit_id}/reveal         - Reveal a specific run's final video
 POST   /api/edits/{edit_id}/rerender       - Re-render a new version with muted music regions
 POST   /api/edits/{edit_id}/copy           - Generate YouTube copy (titles/description/tags/thumbnail)
+GET    /api/edits/{edit_id}/frame?t=<sec>  - Grab a 1280x720 still frame from the final video
+POST   /api/edits/{edit_id}/restyle        - AI-restyle a frame via Gemini's image model (needs Gemini key)
+POST   /api/edits/{edit_id}/thumbnail      - Save a finished thumbnail PNG next to the video
 DELETE /api/edits/{edit_id}                - Delete a run (DB row + files on disk)
 GET    /api/browse-folder                  - OS folder picker (output location)
 GET    /api/browse-file                    - OS file picker (background music)

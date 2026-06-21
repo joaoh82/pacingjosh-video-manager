@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import ThumbnailEditor from './ThumbnailEditor';
 import { Production, EditJobStatus, ProductionEdit, YoutubeCopy } from '@/lib/types';
 import {
   startProductionEdit,
@@ -672,6 +673,13 @@ function EditDetail({
   const [copyErr, setCopyErr] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
+  // Thumbnail builder
+  const [thumbOpen, setThumbOpen] = useState(false);
+  const thumbDuration =
+    edit.edl?.timeline?.duration && edit.edl.timeline.duration > 0
+      ? edit.edl.timeline.duration
+      : 60;
+
   useEffect(() => {
     setCopy(edit.copy ?? null);
     setCopyErr(null);
@@ -882,6 +890,34 @@ function EditDetail({
                 </div>
               )}
             </div>
+          )}
+        </div>
+      )}
+
+      {/* Thumbnail builder (completed runs) */}
+      {edit.status === 'completed' && edit.output_path && (
+        <div className="card">
+          <div className="flex items-center justify-between gap-3 mb-2">
+            <div>
+              <h3 className="font-semibold text-gray-900 dark:text-white">Thumbnail</h3>
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                Grab a real frame from the final video and lay stylized text on top. Optional ✨ AI
+                restyle (Gemini) for a more produced look.
+              </p>
+            </div>
+            <button
+              onClick={() => setThumbOpen((o) => !o)}
+              className="btn btn-secondary text-sm whitespace-nowrap"
+            >
+              {thumbOpen ? 'Close' : 'Make thumbnail'}
+            </button>
+          </div>
+          {thumbOpen && (
+            <ThumbnailEditor
+              editId={edit.id}
+              duration={thumbDuration}
+              suggestedTexts={copy?.thumbnail_texts ?? []}
+            />
           )}
         </div>
       )}

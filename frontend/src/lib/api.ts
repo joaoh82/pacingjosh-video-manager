@@ -431,3 +431,46 @@ export async function generateEditCopy(
     body: JSON.stringify({ regenerate }),
   });
 }
+
+// --- Thumbnail builder ---
+
+/** Grab a 1280x720 still frame from a run's final video at `t` seconds. */
+export async function fetchEditFrame(editId: number, t: number): Promise<Blob> {
+  const res = await fetch(apiUrl(`/api/edits/${editId}/frame?t=${t}`));
+  if (!res.ok) throw new Error((await res.text()) || 'Failed to grab frame');
+  return res.blob();
+}
+
+/** AI-restyle a still frame via Gemini's image model (requires a Gemini key). */
+export async function restyleEditFrame(
+  editId: number,
+  t: number,
+  prompt?: string
+): Promise<Blob> {
+  const res = await fetch(apiUrl(`/api/edits/${editId}/restyle`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ t, prompt }),
+  });
+  if (!res.ok) {
+    let msg = await res.text();
+    try {
+      msg = JSON.parse(msg).detail ?? msg;
+    } catch {
+      /* keep text */
+    }
+    throw new Error(msg || 'AI restyle failed');
+  }
+  return res.blob();
+}
+
+/** Save a finished thumbnail (base64/data-URL PNG) next to the run's video. */
+export async function saveEditThumbnail(
+  editId: number,
+  imageBase64: string
+): Promise<{ path: string }> {
+  return fetchApi<{ path: string }>(`/api/edits/${editId}/thumbnail`, {
+    method: 'POST',
+    body: JSON.stringify({ image: imageBase64 }),
+  });
+}
