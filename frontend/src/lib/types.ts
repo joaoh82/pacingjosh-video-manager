@@ -180,6 +180,8 @@ export interface EditTimeline {
   duration: number;
   clips: TimelineClip[];
   speech: TimelineSpeech[];
+  /** Intervals where the music is ducked (speech + any user-muted regions). */
+  duck?: TimelineSpeech[];
   music: TimelineMusic;
 }
 

@@ -49,7 +49,7 @@ Video Log Manager
 - **Tighten the Cut** - Optionally remove long silences and filler ("um"/"uh") inside clips, splitting each into speech-only sub-clips (jump cuts) for a tighter result
 - **Background Music** - Optionally pick a music track that loops under the speech, with two configurable levels: a volume for when no one is talking and a lower volume for while you're talking. Ducking is driven by the transcript's word timestamps (not audio detection), so it works regardless of how quietly the speech was recorded — and a talking volume of 0% truly silences the music while you speak
 - **Choose Output Location** - Pick the output folder; each run is written to a numbered version subfolder (`productions/v1`, `productions/v2`, …) so re-edits never overwrite each other. The folder you pick stays fixed (no nested production-name folders, nothing in the app's data directory)
-- **Timeline Preview** - Each finished run shows an editor-style timeline (like CapCut): a video track with clip thumbnails, a voice track showing where speech is, and a music track whose bar height drops to the ducked level under speech — handy for seeing the cut and debugging the music
+- **Interactive Timeline** - Each finished run shows an editor-style timeline (like CapCut): a video track with clip thumbnails, a voice track showing where speech is, and a music track whose bar height drops to the ducked level under speech. Zoom/scroll in, click the music "bursts" you don't want, and re-render a new version with them removed — reusing the saved cut and transcription (no extra transcription cost)
 - **Edit History** - Every run is saved per production; reopen the modal to browse past runs, view their script, edit decision list, timeline, and activity log, reveal the final video, or delete a run (removing its database entry and its files from disk)
 - **Editable Prompts** - Both the copy-generation prompt and the edit-planning prompt are editable in Settings
 - **Local Keys** - API keys are stored locally in `config.json` and never returned by the API after saving
@@ -407,6 +407,7 @@ GET    /api/productions/{id}/edit          - Latest persisted edit result (EDL +
 GET    /api/productions/{id}/edits         - Full edit history (newest first)
 POST   /api/productions/{id}/edit/reveal   - Reveal the latest final video in the file browser
 POST   /api/edits/{edit_id}/reveal         - Reveal a specific run's final video
+POST   /api/edits/{edit_id}/rerender       - Re-render a new version with muted music regions
 DELETE /api/edits/{edit_id}                - Delete a run (DB row + files on disk)
 GET    /api/browse-folder                  - OS folder picker (output location)
 GET    /api/browse-file                    - OS file picker (background music)

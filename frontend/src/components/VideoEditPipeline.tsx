@@ -9,6 +9,7 @@ import {
   revealEditOutput,
   revealEditFile,
   deleteEdit,
+  rerenderEdit,
   browseFolder,
   browseFile,
 } from '@/lib/api';
@@ -217,6 +218,18 @@ export default function VideoEditPipeline({
       if (r.success && r.path) setMusicPath(r.path);
     } catch {
       /* ignore */
+    }
+  };
+
+  const handleRerender = async (editId: number, mute: { start: number; end: number }[]) => {
+    if (running) return;
+    setError(null);
+    setStatus(null);
+    try {
+      const res = await rerenderEdit(editId, mute);
+      setJobId(res.job_id);
+    } catch (e: any) {
+      setError(e.message || 'Failed to start re-render');
     }
   };
 
@@ -624,6 +637,8 @@ export default function VideoEditPipeline({
                   <EditDetail
                     edit={selected}
                     onDeleted={() => loadHistory(production.id, true)}
+                    onRerender={handleRerender}
+                    busy={running}
                   />
                 )
               )}
@@ -638,9 +653,13 @@ export default function VideoEditPipeline({
 function EditDetail({
   edit,
   onDeleted,
+  onRerender,
+  busy,
 }: {
   edit: ProductionEdit;
   onDeleted: () => void;
+  onRerender: (editId: number, mute: { start: number; end: number }[]) => void;
+  busy: boolean;
 }) {
   const [scriptOpen, setScriptOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -706,9 +725,17 @@ function EditDetail({
         <p className="text-xs text-gray-500 dark:text-gray-400 break-all">Output: {edit.output_path}</p>
       )}
 
-      {/* Editor-style timeline preview */}
+      {/* Editor-style timeline preview (interactive for completed runs) */}
       {edit.edl?.timeline && edit.edl.timeline.clips.length > 0 && (
-        <EditTimeline timeline={edit.edl.timeline} />
+        <EditTimeline
+          timeline={edit.edl.timeline}
+          onRerender={
+            edit.status === 'completed' && edit.edl.timeline.music?.present
+              ? (mute) => onRerender(edit.id, mute)
+              : undefined
+          }
+          busy={busy}
+        />
       )}
 
       {/* Script (collapsible) */}

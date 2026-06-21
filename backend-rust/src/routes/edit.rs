@@ -153,6 +153,49 @@ async fn reveal_edit_output(
     reveal_output(output)
 }
 
+#[derive(Deserialize)]
+pub struct RerenderRequest {
+    /// Regions (seconds, final timeline) to mute the music in — the music
+    /// "bursts" the user removed on the timeline.
+    #[serde(default)]
+    pub mute: Vec<MuteRegion>,
+}
+
+#[derive(Deserialize)]
+pub struct MuteRegion {
+    pub start: f32,
+    pub end: f32,
+}
+
+/// Re-render a run with timeline edits (muted music regions) into a new version,
+/// reusing the saved cut/transcripts (no transcription or LLM cost).
+#[post("/edits/{edit_id}/rerender")]
+async fn rerender_edit(
+    pool: web::Data<DbPool>,
+    config: web::Data<ConfigManager>,
+    edit_map: web::Data<EditJobMap>,
+    path: web::Path<i32>,
+    body: web::Json<RerenderRequest>,
+) -> HttpResponse {
+    let edit_id = path.into_inner();
+    let mute: Vec<(f32, f32)> = body.mute.iter().map(|m| (m.start, m.end)).collect();
+
+    match edit_service::start_rerender(
+        edit_id,
+        mute,
+        pool.get_ref().clone(),
+        config.get_ai_settings(),
+        edit_map.get_ref().clone(),
+    ) {
+        Ok(job_id) => HttpResponse::Ok().json(serde_json::json!({
+            "status": "started",
+            "job_id": job_id,
+            "message": "Re-render started",
+        })),
+        Err(e) => HttpResponse::BadRequest().json(serde_json::json!({ "detail": e })),
+    }
+}
+
 /// Delete a run: removes its files from disk (video, EDL JSON, version folder)
 /// and its database row.
 #[delete("/edits/{edit_id}")]
@@ -277,5 +320,6 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         .service(get_latest_edit)
         .service(reveal_edit_output)
         .service(reveal_edit_by_id)
+        .service(rerender_edit)
         .service(delete_edit);
 }

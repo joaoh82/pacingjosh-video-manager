@@ -90,6 +90,8 @@ diesel::table! {
         text_model -> Nullable<Text>,
         created_at -> Timestamp,
         logs -> Nullable<Text>,
+        transcripts_json -> Nullable<Text>,
+        options_json -> Nullable<Text>,
     }
 }
 

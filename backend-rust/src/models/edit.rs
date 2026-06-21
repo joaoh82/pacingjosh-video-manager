@@ -22,6 +22,8 @@ pub struct ProductionEdit {
     pub text_model: Option<String>,
     pub created_at: NaiveDateTime,
     pub logs: Option<String>,
+    pub transcripts_json: Option<String>,
+    pub options_json: Option<String>,
 }
 
 #[derive(Debug, Insertable)]
@@ -40,6 +42,8 @@ pub struct NewProductionEdit {
     pub text_model: Option<String>,
     pub created_at: NaiveDateTime,
     pub logs: Option<String>,
+    pub transcripts_json: Option<String>,
+    pub options_json: Option<String>,
 }
 
 /// API-facing shape with `edl_json` decoded into a structured value.

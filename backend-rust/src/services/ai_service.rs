@@ -22,7 +22,7 @@ const ANTHROPIC_BASE: &str = "https://api.anthropic.com/v1";
 const ELEVENLABS_BASE: &str = "https://api.elevenlabs.io/v1";
 
 /// A single transcribed word with its start/end offset (seconds) in the source.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TranscriptWord {
     pub text: String,
     pub start: f32,

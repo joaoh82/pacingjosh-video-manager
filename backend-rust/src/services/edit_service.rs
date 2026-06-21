@@ -11,7 +11,7 @@
 use chrono::{NaiveDateTime, Utc};
 use diesel::prelude::*;
 use log::{error, info, warn};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -22,7 +22,7 @@ use crate::db::DbPool;
 use crate::models::NewProductionEdit;
 use crate::schema::production_edits;
 use crate::services::ai_service::{self, TranscriptWord};
-use crate::services::{ffmpeg_service, production_service};
+use crate::services::{ffmpeg_service, production_service, video_service};
 
 pub type EditJobMap = Arc<Mutex<HashMap<String, EditJobProgress>>>;
 
@@ -154,7 +154,7 @@ struct ResolvedClipInternal {
 /// Per-run options for the edit pipeline (everything beyond the production +
 /// providers): the script, optional creator instructions, where to write the
 /// final video, whether to burn in captions, and optional background music.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct EditOptions {
     pub script: String,
     pub instructions: Option<String>,
@@ -274,28 +274,31 @@ fn run_edit(
 
     // Snapshot the activity log so the persisted row matches what the user saw.
     let logs = snapshot_logs(&edit_map, job_id);
+    let options_json = serde_json::to_string(&opts).ok();
 
     match result {
-        Ok((edl_value, edl_path, output_path)) => {
+        Ok(ae) => {
             let persisted = persist_edit(
                 &pool,
                 production_id,
                 "completed",
                 &opts,
-                Some(&edl_value),
-                Some(&output_path),
-                Some(&edl_path),
+                Some(&ae.edl),
+                Some(&ae.output_path),
+                Some(&ae.edl_path),
                 None,
                 &logs,
                 &ai,
+                Some(&ae.transcripts_json),
+                options_json.as_deref(),
             );
             update(&edit_map, job_id, |p| {
                 p.status = "completed".to_string();
                 p.stage = "completed".to_string();
                 p.message = "Final video created.".to_string();
-                p.edl = Some(edl_value);
-                p.edl_path = Some(edl_path.to_string_lossy().to_string());
-                p.output_path = Some(output_path.to_string_lossy().to_string());
+                p.edl = Some(ae.edl);
+                p.edl_path = Some(ae.edl_path.to_string_lossy().to_string());
+                p.output_path = Some(ae.output_path.to_string_lossy().to_string());
                 p.end_time = Some(Utc::now().naive_utc());
                 if let Err(e) = &persisted {
                     push_log(p, &format!("⚠ Could not save this run to history: {}", e));
@@ -316,6 +319,8 @@ fn run_edit(
                 Some(&e),
                 &logs,
                 &ai,
+                None,
+                options_json.as_deref(),
             );
             if let Err(pe) = &persisted {
                 warn!("[edit {}] also failed to persist the failure: {}", job_id, pe);
@@ -340,7 +345,252 @@ fn snapshot_logs(edit_map: &EditJobMap, job_id: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// The pipeline proper. Returns (edl json value, edl path, output video path).
+/// Re-render an existing run with extra music-muted regions, WITHOUT
+/// re-transcribing or re-planning: it reuses the run's saved cut (the EDL clips),
+/// word transcripts, and options, and writes a fresh version (v<N+1>). `mute` is
+/// a list of (start, end) seconds on the final timeline where the music should
+/// be ducked (i.e. the bursts the user removed). Returns a job id to poll.
+pub fn start_rerender(
+    edit_id: i32,
+    mute: Vec<(f32, f32)>,
+    pool: DbPool,
+    ai: AiSettings,
+    edit_map: EditJobMap,
+) -> Result<String, String> {
+    let mut conn = pool.get().map_err(|e| format!("Database connection failed: {}", e))?;
+
+    let edit = get_edit_by_id(&mut conn, edit_id).ok_or_else(|| format!("Edit not found: {}", edit_id))?;
+    let production_id = edit.production_id;
+    let production = production_service::get_production(&mut conn, production_id)
+        .ok_or_else(|| format!("Production not found: {}", production_id))?;
+
+    let opts: EditOptions = edit
+        .options_json
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .ok_or("This run can't be re-rendered (it predates re-render support — make a new edit).")?;
+
+    if opts.output_dir.as_deref().map(str::trim).unwrap_or("").is_empty() {
+        return Err("This run has no saved output folder to re-render into.".to_string());
+    }
+
+    let transcripts: HashMap<i32, Vec<TranscriptWord>> = edit
+        .transcripts_json
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_default();
+
+    // Reconstruct the cut from the saved EDL clips (source ranges + video ids).
+    let edl: serde_json::Value = edit
+        .edl_json
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .ok_or("This run has no saved edit decision list to re-render.")?;
+
+    let mut cut_list: Vec<ResolvedClipInternal> = Vec::new();
+    for c in edl["clips"].as_array().cloned().unwrap_or_default() {
+        let vid = match c["video_id"].as_i64() {
+            Some(v) => v as i32,
+            None => continue,
+        };
+        let video = match video_service::get_video(&mut conn, vid) {
+            Some(v) => v,
+            None => continue,
+        };
+        let start = c["start"].as_f64().unwrap_or(0.0) as f32;
+        let end = c["end"].as_f64().unwrap_or(0.0) as f32;
+        if end <= start {
+            continue;
+        }
+        cut_list.push(ResolvedClipInternal {
+            video_id: vid,
+            filename: video.filename.clone(),
+            file_path: video.file_path.clone(),
+            start,
+            end,
+            reason: c["reason"].as_str().map(|s| s.to_string()),
+        });
+    }
+    if cut_list.is_empty() {
+        return Err("None of this run's source videos are available to re-render.".to_string());
+    }
+
+    let job_id = Uuid::new_v4().to_string();
+    {
+        let mut map = edit_map.lock().unwrap();
+        map.insert(job_id.clone(), EditJobProgress::new(job_id.clone(), production_id));
+    }
+
+    let production_title = production.title;
+    let job_id_thread = job_id.clone();
+    std::thread::Builder::new()
+        .name(format!("vm-rerender-{}", job_id))
+        .spawn(move || {
+            run_rerender(
+                &job_id_thread,
+                production_id,
+                production_title,
+                opts,
+                ai,
+                cut_list,
+                transcripts,
+                mute,
+                pool,
+                edit_map,
+            );
+        })
+        .map_err(|e| format!("Failed to spawn re-render thread: {}", e))?;
+
+    Ok(job_id)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_rerender(
+    job_id: &str,
+    production_id: i32,
+    production_title: String,
+    opts: EditOptions,
+    ai: AiSettings,
+    cut_list: Vec<ResolvedClipInternal>,
+    transcripts: HashMap<i32, Vec<TranscriptWord>>,
+    mute: Vec<(f32, f32)>,
+    pool: DbPool,
+    edit_map: EditJobMap,
+) {
+    let result = rerender_inner(job_id, production_id, &production_title, &opts, &ai, &cut_list, &transcripts, &mute, &edit_map);
+    let logs = snapshot_logs(&edit_map, job_id);
+    let options_json = serde_json::to_string(&opts).ok();
+    let transcripts_json = serde_json::to_string(&transcripts).ok();
+
+    match result {
+        Ok(ae) => {
+            let _ = persist_edit(
+                &pool,
+                production_id,
+                "completed",
+                &opts,
+                Some(&ae.edl),
+                Some(&ae.output_path),
+                Some(&ae.edl_path),
+                None,
+                &logs,
+                &ai,
+                transcripts_json.as_deref(),
+                options_json.as_deref(),
+            );
+            update(&edit_map, job_id, |p| {
+                p.status = "completed".to_string();
+                p.stage = "completed".to_string();
+                p.message = "Re-rendered video created.".to_string();
+                p.edl = Some(ae.edl);
+                p.edl_path = Some(ae.edl_path.to_string_lossy().to_string());
+                p.output_path = Some(ae.output_path.to_string_lossy().to_string());
+                p.end_time = Some(Utc::now().naive_utc());
+                push_log(p, "Done.");
+            });
+        }
+        Err(e) => {
+            error!("[rerender {}] failed: {}", job_id, e);
+            let _ = persist_edit(
+                &pool, production_id, "failed", &opts, None, None, None, Some(&e), &logs, &ai,
+                transcripts_json.as_deref(), options_json.as_deref(),
+            );
+            update(&edit_map, job_id, |p| {
+                p.status = "failed".to_string();
+                p.stage = "failed".to_string();
+                p.message = e.clone();
+                p.error = Some(e);
+                p.end_time = Some(Utc::now().naive_utc());
+            });
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn rerender_inner(
+    job_id: &str,
+    production_id: i32,
+    production_title: &str,
+    opts: &EditOptions,
+    ai: &AiSettings,
+    cut_list: &[ResolvedClipInternal],
+    transcripts: &HashMap<i32, Vec<TranscriptWord>>,
+    mute: &[(f32, f32)],
+    edit_map: &EditJobMap,
+) -> Result<AssembledEdit, String> {
+    set_stage(edit_map, job_id, "starting", "Re-rendering with your timeline edits…");
+    log_msg(edit_map, job_id, &format!("ffmpeg: {}", ffmpeg_service::ffmpeg_diagnostics()));
+
+    let root = opts.output_dir.as_deref().map(str::trim).filter(|s| !s.is_empty())
+        .ok_or("This run has no saved output folder.")?;
+    let prod_dir = std::path::Path::new(root).join("productions");
+    let version = next_version_number(&prod_dir);
+    let out_dir = prod_dir.join(format!("v{}", version));
+    std::fs::create_dir_all(&out_dir)
+        .map_err(|e| format!("Failed to create output folder {}: {}", out_dir.display(), e))?;
+
+    let stem = output_stem(opts.output_name.as_deref(), production_title, job_id);
+    let output_path = out_dir.join(format!("{}.mp4", stem));
+    let edl_path = out_dir.join(format!("{}.json", stem));
+
+    let music_path = opts.music_path.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(PathBuf::from);
+    let music_name = music_path.as_ref().and_then(|p| p.file_name()).map(|f| f.to_string_lossy().to_string());
+
+    // Music now ducks at speech ∪ the muted regions the user removed.
+    let speech = timeline_speech_intervals(cut_list, transcripts, opts.music_min_gap);
+    let duck = merge_intervals(&speech, mute);
+    if !mute.is_empty() {
+        log_msg(edit_map, job_id, &format!("Muting music in {} selected region(s).", mute.len()));
+    }
+
+    let mut edl_value = build_edl_json(production_id, production_title, ai, cut_list, &output_path, opts.captions, music_name.as_deref());
+    edl_value["timeline"] = build_timeline(cut_list, &speech, &duck, opts, music_name.as_deref());
+    let pretty = serde_json::to_string_pretty(&edl_value).unwrap_or_else(|_| "{}".to_string());
+    std::fs::write(&edl_path, &pretty).map_err(|e| format!("Failed to write EDL JSON: {}", e))?;
+
+    let work_dir = out_dir.join(format!(".work-{}", job_id));
+    assemble_final(
+        edit_map, job_id, cut_list, transcripts, opts.captions, &[], &work_dir, &output_path,
+        music_path.as_deref(), opts.music_volume, opts.music_duck_volume, &duck,
+    )?;
+
+    Ok(AssembledEdit {
+        edl: edl_value,
+        edl_path,
+        output_path,
+        transcripts_json: serde_json::to_string(transcripts).unwrap_or_else(|_| "{}".to_string()),
+    })
+}
+
+/// Merge two interval lists into sorted, non-overlapping intervals.
+fn merge_intervals(a: &[(f32, f32)], b: &[(f32, f32)]) -> Vec<(f32, f32)> {
+    let mut all: Vec<(f32, f32)> = a.iter().chain(b.iter()).copied().filter(|(s, e)| e > s).collect();
+    all.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap_or(std::cmp::Ordering::Equal));
+    let mut out: Vec<(f32, f32)> = Vec::new();
+    for (s, e) in all {
+        if let Some(last) = out.last_mut() {
+            if s <= last.1 {
+                if e > last.1 {
+                    last.1 = e;
+                }
+                continue;
+            }
+        }
+        out.push((s, e));
+    }
+    out
+}
+
+/// Outcome of a successful pipeline run, carried back to `run_edit` for
+/// persistence (including the transcripts needed to re-render later).
+struct AssembledEdit {
+    edl: serde_json::Value,
+    edl_path: PathBuf,
+    output_path: PathBuf,
+    transcripts_json: String,
+}
+
+/// The pipeline proper.
 fn run_edit_inner(
     job_id: &str,
     production_id: i32,
@@ -349,7 +599,7 @@ fn run_edit_inner(
     takes: &[TakeMeta],
     ai: &AiSettings,
     edit_map: &EditJobMap,
-) -> Result<(serde_json::Value, PathBuf, PathBuf), String> {
+) -> Result<AssembledEdit, String> {
     let script = opts.script.as_str();
     let instructions = opts.instructions.as_deref();
 
@@ -499,13 +749,56 @@ fn run_edit_inner(
         opts.captions,
         music_name.as_deref(),
     );
-    edl_value["timeline"] = build_timeline(&cut_list, &speech_timeline, opts, music_name.as_deref());
+    edl_value["timeline"] = build_timeline(&cut_list, &speech_timeline, &speech_timeline, opts, music_name.as_deref());
     let pretty = serde_json::to_string_pretty(&edl_value).unwrap_or_else(|_| "{}".to_string());
     std::fs::write(&edl_path, &pretty).map_err(|e| format!("Failed to write EDL JSON: {}", e))?;
     log_msg(edit_map, job_id, &format!("Wrote edit decision list to {}", edl_path.display()));
 
-    // --- Stage 3: stitch the clips with ffmpeg -----------------------------
-    let (target_w, target_h, target_fps) = resolve_target_spec(&cut_list, takes);
+    // --- Stage 3: stitch the clips + music with ffmpeg ---------------------
+    let work_dir = out_dir.join(format!(".work-{}", job_id));
+    assemble_final(
+        edit_map,
+        job_id,
+        &cut_list,
+        &transcripts,
+        opts.captions,
+        takes,
+        &work_dir,
+        &output_path,
+        music_path.as_deref(),
+        opts.music_volume,
+        opts.music_duck_volume,
+        &speech_timeline,
+    )?;
+
+    Ok(AssembledEdit {
+        edl: edl_value,
+        edl_path,
+        output_path,
+        transcripts_json: serde_json::to_string(&transcripts).unwrap_or_else(|_| "{}".to_string()),
+    })
+}
+
+/// Cut every (sub-)clip to a normalized segment (burning in captions when
+/// enabled), concatenate them, and mix in the music ducked at `duck_intervals`.
+/// Shared by the full pipeline and the re-render path. `takes_for_spec` may be
+/// empty — then the output spec is probed from the first clip's file.
+#[allow(clippy::too_many_arguments)]
+fn assemble_final(
+    edit_map: &EditJobMap,
+    job_id: &str,
+    cut_list: &[ResolvedClipInternal],
+    transcripts: &HashMap<i32, Vec<TranscriptWord>>,
+    captions: bool,
+    takes_for_spec: &[TakeMeta],
+    work_dir: &std::path::Path,
+    output_path: &std::path::Path,
+    music_path: Option<&std::path::Path>,
+    music_volume: f32,
+    music_duck_volume: f32,
+    duck_intervals: &[(f32, f32)],
+) -> Result<(), String> {
+    let (target_w, target_h, target_fps) = resolve_target_spec(cut_list, takes_for_spec);
     set_stage(
         edit_map,
         job_id,
@@ -516,7 +809,7 @@ fn run_edit_inner(
             target_w,
             target_h,
             target_fps,
-            if opts.captions { " with captions" } else { "" }
+            if captions { " with captions" } else { "" }
         ),
     );
     update(edit_map, job_id, |p| {
@@ -524,9 +817,7 @@ fn run_edit_inner(
         p.processed = 0;
     });
 
-    // Transient segment workspace inside the output folder; removed on success.
-    let work_dir = out_dir.join(format!(".work-{}", job_id));
-    std::fs::create_dir_all(&work_dir).map_err(|e| format!("Failed to create work dir: {}", e))?;
+    std::fs::create_dir_all(work_dir).map_err(|e| format!("Failed to create work dir: {}", e))?;
 
     let mut segments: Vec<PathBuf> = Vec::with_capacity(cut_list.len());
     for (i, clip) in cut_list.iter().enumerate() {
@@ -536,9 +827,7 @@ fn run_edit_inner(
             &format!("Cutting clip {}/{}: {} [{:.2}s–{:.2}s]", i + 1, cut_list.len(), clip.filename, clip.start, clip.end),
         );
 
-        // Build per-clip captions (re-timed to the segment) when enabled and the
-        // take has word timestamps.
-        let sub_name = if opts.captions {
+        let sub_name = if captions {
             let words = transcripts.get(&clip.video_id).map(|w| w.as_slice()).unwrap_or(&[]);
             match build_clip_srt(words, clip.start, clip.end) {
                 Some(srt) => {
@@ -568,8 +857,7 @@ fn run_edit_inner(
         update(edit_map, job_id, |p| p.processed = (i + 1) as i64);
     }
 
-    // Concatenate. If music is requested, concat to a temp file first, then mix.
-    if let Some(music) = music_path.as_ref().filter(|p| p.exists()) {
+    if let Some(music) = music_path.filter(|p| p.exists()) {
         let concat_tmp = work_dir.join("_concat.mp4");
         set_stage(edit_map, job_id, "stitching", "Joining clips…");
         ffmpeg_service::concat_clips(&segments, &concat_tmp)?;
@@ -580,33 +868,31 @@ fn run_edit_inner(
             job_id,
             &format!(
                 "Music ducking: {}% in pauses → {}% while talking",
-                (opts.music_volume * 100.0).round(),
-                (opts.music_duck_volume * 100.0).round()
+                (music_volume * 100.0).round(),
+                (music_duck_volume * 100.0).round()
             ),
         );
-        match ffmpeg_service::add_background_music(&concat_tmp, music, opts.music_volume, opts.music_duck_volume, &speech_timeline, &output_path) {
+        match ffmpeg_service::add_background_music(&concat_tmp, music, music_volume, music_duck_volume, duck_intervals, output_path) {
             Ok(()) => log_msg(edit_map, job_id, "Mixed in background music."),
             Err(e) => {
                 warn!("[edit {}] background music failed: {}", job_id, e);
                 log_msg(edit_map, job_id, &format!("Background music failed ({}). Keeping the cut without music.", e));
-                std::fs::copy(&concat_tmp, &output_path)
+                std::fs::copy(&concat_tmp, output_path)
                     .map_err(|e| format!("Failed to write final video: {}", e))?;
             }
         }
     } else {
         set_stage(edit_map, job_id, "stitching", "Joining clips into the final video…");
-        ffmpeg_service::concat_clips(&segments, &output_path)?;
+        ffmpeg_service::concat_clips(&segments, output_path)?;
     }
 
-    // Best-effort cleanup of intermediate segments.
-    let _ = std::fs::remove_dir_all(&work_dir);
+    let _ = std::fs::remove_dir_all(work_dir);
 
     if !output_path.exists() {
         return Err("ffmpeg reported success but the final video is missing.".to_string());
     }
     log_msg(edit_map, job_id, &format!("Final video: {}", output_path.display()));
-
-    Ok((edl_value, edl_path, output_path))
+    Ok(())
 }
 
 /// Strip path separators and awkward characters from a single path segment.
@@ -855,6 +1141,7 @@ fn build_edl_json(
 fn build_timeline(
     resolved: &[ResolvedClipInternal],
     speech: &[(f32, f32)],
+    duck: &[(f32, f32)],
     opts: &EditOptions,
     music_name: Option<&str>,
 ) -> serde_json::Value {
@@ -876,10 +1163,11 @@ fn build_timeline(
         cursor = tend;
     }
 
-    let speech_json: Vec<serde_json::Value> = speech
-        .iter()
-        .map(|(s, e)| serde_json::json!({ "start": round2(*s), "end": round2(*e) }))
-        .collect();
+    let to_json = |xs: &[(f32, f32)]| -> Vec<serde_json::Value> {
+        xs.iter()
+            .map(|(s, e)| serde_json::json!({ "start": round2(*s), "end": round2(*e) }))
+            .collect()
+    };
 
     let music_present = opts
         .music_path
@@ -891,7 +1179,8 @@ fn build_timeline(
     serde_json::json!({
         "duration": round2(cursor),
         "clips": clips,
-        "speech": speech_json,
+        "speech": to_json(speech),
+        "duck": to_json(duck),
         "music": {
             "present": music_present,
             "name": music_name,
@@ -1171,6 +1460,8 @@ fn persist_edit(
     error: Option<&str>,
     logs: &[String],
     ai: &AiSettings,
+    transcripts_json: Option<&str>,
+    options_json: Option<&str>,
 ) -> Result<(), String> {
     let mut conn = pool
         .get()
@@ -1190,6 +1481,8 @@ fn persist_edit(
         text_model: Some(ai.text_model.clone()),
         created_at: Utc::now().naive_utc(),
         logs: serde_json::to_string(logs).ok(),
+        transcripts_json: transcripts_json.map(|s| s.to_string()),
+        options_json: options_json.map(|s| s.to_string()),
     };
 
     diesel::insert_into(production_edits::table)
