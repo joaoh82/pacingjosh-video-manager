@@ -131,6 +131,9 @@ pub async fn run(paths: BackendPaths) -> std::io::Result<()> {
 
         App::new()
             .wrap(cors)
+            // Thumbnails are posted as base64 PNG JSON (a 1280x720 still can be a
+            // few MB), so lift the default 256KB JSON body cap.
+            .app_data(web::JsonConfig::default().limit(32 * 1024 * 1024))
             .app_data(config_data.clone())
             .app_data(pool_data.clone())
             .app_data(scan_data.clone())

@@ -150,15 +150,29 @@ export default function ThumbnailEditor({ editId, duration, suggestedTexts }: Th
   };
 
   const handleDownload = () => {
-    canvasRef.current?.toBlob((blob) => {
-      if (!blob) return;
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'thumbnail.png';
-      a.click();
-      URL.revokeObjectURL(url);
-    }, 'image/png');
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    setError(null);
+    try {
+      canvas.toBlob((blob) => {
+        if (!blob) {
+          setError('Could not render the image. Try "Save to folder" instead.');
+          return;
+        }
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'thumbnail.png';
+        // The anchor must be in the DOM for .click() to trigger a download in
+        // most WebViews/browsers.
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }, 'image/png');
+    } catch (e: any) {
+      setError(e.message || 'Download failed. Use "Save to folder" instead.');
+    }
   };
 
   const handleSave = async () => {
