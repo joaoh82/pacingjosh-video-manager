@@ -445,6 +445,11 @@ export async function generateEditCopy(
   });
 }
 
+/** Streaming URL for a finished run's final video (range-enabled, seekable). */
+export function getEditVideoUrl(editId: number): string {
+  return apiUrl(`/api/edits/${editId}/video`);
+}
+
 // --- Thumbnail builder ---
 
 /** Grab a 1280x720 still frame from a run's final video at `t` seconds. */

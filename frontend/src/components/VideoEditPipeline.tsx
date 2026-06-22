@@ -10,6 +10,7 @@ import {
   getProductionVideos,
   getStreamUrl,
   getThumbnailUrl,
+  getEditVideoUrl,
   revealEditOutput,
   revealEditFile,
   deleteEdit,
@@ -926,6 +927,9 @@ function EditDetail({
       {edit.edl?.timeline && edit.edl.timeline.clips.length > 0 && (
         <EditTimeline
           timeline={edit.edl.timeline}
+          videoSrc={
+            edit.status === 'completed' && edit.output_path ? getEditVideoUrl(edit.id) : undefined
+          }
           onRerender={
             edit.status === 'completed' ? (edits) => onRerender(edit.id, edits) : undefined
           }

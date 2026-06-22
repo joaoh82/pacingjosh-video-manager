@@ -1,4 +1,5 @@
-use actix_web::{delete, get, post, web, HttpResponse};
+use actix_files::NamedFile;
+use actix_web::{delete, get, post, web, HttpRequest, HttpResponse};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Deserialize;
 use std::path::Path;
@@ -293,6 +294,28 @@ fn edit_output_path(pool: &DbPool, edit_id: i32) -> Option<String> {
         .filter(|p| Path::new(p).exists())
 }
 
+/// Stream a run's final video for in-app playback. `NamedFile` handles HTTP
+/// range requests, so the player can seek without downloading the whole file.
+#[get("/edits/{edit_id}/video")]
+async fn edit_video(
+    pool: web::Data<DbPool>,
+    path: web::Path<i32>,
+    req: HttpRequest,
+) -> HttpResponse {
+    let edit_id = path.into_inner();
+    let out = match edit_output_path(pool.get_ref(), edit_id) {
+        Some(p) => p,
+        None => return HttpResponse::NotFound().json(serde_json::json!({ "detail": "Final video not found" })),
+    };
+    match NamedFile::open_async(&out).await {
+        Ok(file) => file
+            .use_last_modified(true)
+            .prefer_utf8(true)
+            .into_response(&req),
+        Err(e) => HttpResponse::NotFound().json(serde_json::json!({ "detail": format!("Could not open video: {}", e) })),
+    }
+}
+
 /// Grab a still frame (1280x720 JPEG) from a run's final video at `t` seconds.
 #[get("/edits/{edit_id}/frame")]
 async fn edit_frame(
@@ -520,6 +543,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         .service(reveal_edit_by_id)
         .service(rerender_edit)
         .service(generate_copy)
+        .service(edit_video)
         .service(edit_frame)
         .service(restyle_frame)
         .service(save_thumbnail)

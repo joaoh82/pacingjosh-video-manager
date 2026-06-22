@@ -51,22 +51,30 @@ interface EditTimelineProps {
   timeline: Timeline;
   /** Re-render the run with these timeline edits (undefined disables editing). */
   onRerender?: (edits: TimelineEdits) => void;
+  /** Streaming URL of the rendered video — enables the synced preview player. */
+  videoSrc?: string;
   busy?: boolean;
 }
 
-export default function EditTimeline({ timeline, onRerender, busy }: EditTimelineProps) {
+export default function EditTimeline({ timeline, onRerender, videoSrc, busy }: EditTimelineProps) {
   const dur = timeline.duration > 0 ? timeline.duration : 1;
   const wrapRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const [containerW, setContainerW] = useState(0);
   const [zoom, setZoom] = useState(1);
   const [muted, setMuted] = useState<{ start: number; end: number }[]>([]);
   // Clip `order`s the user selected to enhance on the next re-render.
   const [selectedClips, setSelectedClips] = useState<number[]>([]);
+  // Playback position (seconds) of the preview player, mirrored by the playhead.
+  const [currentTime, setCurrentTime] = useState(0);
+  const [playing, setPlaying] = useState(false);
 
-  // Reset selections when the underlying run changes.
+  // Reset selections + playhead when the underlying run changes.
   useEffect(() => {
     setMuted([]);
     setSelectedClips([]);
+    setCurrentTime(0);
+    setPlaying(false);
   }, [timeline]);
 
   useEffect(() => {
@@ -114,6 +122,93 @@ export default function EditTimeline({ timeline, onRerender, busy }: EditTimelin
     );
   };
 
+  // Mirror the preview player's position onto the timeline playhead.
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    let raf = 0;
+    const sync = () => {
+      const t = v.currentTime;
+      // Skip sub-30ms deltas to halve re-renders while playing.
+      setCurrentTime((prev) => (Math.abs(prev - t) > 0.03 ? t : prev));
+    };
+    const loop = () => {
+      sync();
+      raf = requestAnimationFrame(loop);
+    };
+    const onPlay = () => {
+      setPlaying(true);
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(loop);
+    };
+    const onStop = () => {
+      setPlaying(false);
+      cancelAnimationFrame(raf);
+      sync();
+    };
+    v.addEventListener('play', onPlay);
+    v.addEventListener('playing', onPlay);
+    v.addEventListener('pause', onStop);
+    v.addEventListener('ended', onStop);
+    v.addEventListener('seeked', sync);
+    v.addEventListener('timeupdate', sync);
+    return () => {
+      cancelAnimationFrame(raf);
+      v.removeEventListener('play', onPlay);
+      v.removeEventListener('playing', onPlay);
+      v.removeEventListener('pause', onStop);
+      v.removeEventListener('ended', onStop);
+      v.removeEventListener('seeked', sync);
+      v.removeEventListener('timeupdate', sync);
+    };
+  }, [videoSrc]);
+
+  // Seek the player (and playhead) to `t` seconds.
+  const seekTo = (t: number) => {
+    const clamped = Math.max(0, Math.min(dur, t));
+    setCurrentTime(clamped);
+    const v = videoRef.current;
+    if (v) v.currentTime = clamped;
+  };
+
+  // Scrub by clicking or dragging on the ruler.
+  const rulerRef = useRef<HTMLDivElement>(null);
+  const scrubbingRef = useRef(false);
+  const seekFromClientX = (clientX: number) => {
+    const el = rulerRef.current;
+    if (!el) return;
+    const x = clientX - el.getBoundingClientRect().left;
+    seekTo(x / pxPerSec);
+  };
+  useEffect(() => {
+    if (!videoSrc) return;
+    const move = (e: MouseEvent) => {
+      if (scrubbingRef.current) seekFromClientX(e.clientX);
+    };
+    const up = () => {
+      scrubbingRef.current = false;
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+    return () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [videoSrc, pxPerSec]);
+
+  // Keep the playhead in view while playing on a zoomed-in timeline.
+  useEffect(() => {
+    if (!playing) return;
+    const el = wrapRef.current;
+    if (!el) return;
+    const x = currentTime * pxPerSec;
+    if (x < el.scrollLeft + 24 || x > el.scrollLeft + el.clientWidth - 24) {
+      el.scrollLeft = Math.max(0, x - el.clientWidth / 2);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentTime, playing]);
+
   const ticks = Array.from({ length: 9 }, (_, i) => (dur * i) / 8);
   const Label = ({ h, children }: { h: number; children: ReactNode }) => (
     <div
@@ -126,6 +221,18 @@ export default function EditTimeline({ timeline, onRerender, busy }: EditTimelin
 
   return (
     <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-2 bg-gray-50 dark:bg-gray-900/40">
+      {/* Preview player — its position drives the timeline playhead */}
+      {videoSrc && (
+        <video
+          key={videoSrc}
+          ref={videoRef}
+          src={videoSrc}
+          controls
+          preload="metadata"
+          className="w-full max-h-[360px] bg-black rounded mb-2"
+        />
+      )}
+
       {/* Toolbar */}
       <div className="flex items-center gap-2 mb-2">
         <span className="text-[10px] text-gray-500 dark:text-gray-400">Zoom</span>
@@ -153,6 +260,11 @@ export default function EditTimeline({ timeline, onRerender, busy }: EditTimelin
           +
         </button>
         <span className="text-[10px] text-gray-400 dark:text-gray-500">{zoom.toFixed(1)}×</span>
+        {videoSrc && (
+          <span className="text-[10px] tabular-nums text-gray-500 dark:text-gray-400 ml-2">
+            {fmtTime(currentTime)} / {fmtTime(dur)}
+          </span>
+        )}
         <div className="flex-1" />
         {onRerender &&
           (() => {
@@ -185,7 +297,7 @@ export default function EditTimeline({ timeline, onRerender, busy }: EditTimelin
       <div className="flex gap-2">
         {/* Fixed label gutter */}
         <div className="flex flex-col gap-1 flex-none w-12">
-          <div style={{ height: 14 }} />
+          <div style={{ height: 16 }} />
           <Label h={52}>Video</Label>
           <Label h={16}>Voice</Label>
           <Label h={44}>Music</Label>
@@ -193,13 +305,36 @@ export default function EditTimeline({ timeline, onRerender, busy }: EditTimelin
 
         {/* Scrollable tracks */}
         <div ref={wrapRef} className="overflow-x-auto flex-1">
-          <div className="flex flex-col gap-1" style={{ width: innerW }}>
-            {/* Ruler */}
-            <div className="relative" style={{ height: 14 }}>
+          <div className="relative flex flex-col gap-1" style={{ width: innerW }}>
+            {/* Playhead (mirrors the preview player; click/drag the ruler to seek) */}
+            {videoSrc && (
+              <div
+                className="absolute top-0 bottom-0 z-20 pointer-events-none"
+                style={{ left: X(currentTime) }}
+              >
+                <div className="absolute inset-y-0 w-px bg-red-500" />
+                <div className="absolute -top-0.5 -left-[4px] w-[9px] h-[9px] rounded-sm bg-red-500" />
+              </div>
+            )}
+
+            {/* Ruler — click or drag to scrub the preview */}
+            <div
+              ref={rulerRef}
+              onMouseDown={
+                videoSrc
+                  ? (e) => {
+                      scrubbingRef.current = true;
+                      seekFromClientX(e.clientX);
+                    }
+                  : undefined
+              }
+              className={`relative ${videoSrc ? 'cursor-pointer' : ''}`}
+              style={{ height: 16 }}
+            >
               {ticks.map((t, i) => (
                 <span
                   key={i}
-                  className="absolute top-0 text-[9px] text-gray-400 dark:text-gray-500 -translate-x-1/2 whitespace-nowrap"
+                  className="absolute top-0 text-[9px] text-gray-400 dark:text-gray-500 -translate-x-1/2 whitespace-nowrap pointer-events-none"
                   style={{ left: X(t) }}
                 >
                   {fmtTime(t)}
@@ -300,6 +435,7 @@ export default function EditTimeline({ timeline, onRerender, busy }: EditTimelin
 
       <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-1 pl-14">
         Total {fmtTime(dur)} · {timeline.clips.length} clip{timeline.clips.length !== 1 ? 's' : ''}.
+        {videoSrc ? ' Play the preview above or click/drag the ruler to scrub — the red playhead follows along.' : ''}
         {editable ? (
           <>
             {' '}Click a video clip to mark it for{' '}

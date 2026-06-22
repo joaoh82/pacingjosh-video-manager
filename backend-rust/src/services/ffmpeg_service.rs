@@ -324,18 +324,25 @@ pub fn extract_audio(video_path: &Path, out_dir: &Path) -> Result<PathBuf, Strin
 ///     intensity),
 ///   * `afftdn` is an FFT denoiser that knocks down steady background hiss (its
 ///     noise-reduction amount in dB rises with intensity),
-///   * `adeclick` removes impulsive mouth clicks/pops.
-/// All three are built into FFmpeg, so no external model file is needed.
+///   * `adeclick` removes impulsive mouth clicks/pops,
+///   * a gentle high-shelf (`treble`) restores the presence/clarity the denoiser
+///     dulls, so the cleaned voice doesn't sound muffled.
+/// All filters are built into FFmpeg, so no external model file is needed.
 pub fn voice_enhance_filter(intensity: f32) -> String {
     let i = intensity.clamp(0.0, 1.0);
-    // 70 Hz (gentle) → 120 Hz (aggressive wind/rumble cut).
-    let highpass = 70.0 + 50.0 * i;
-    // 6 dB (subtle) → 27 dB (heavy) of broadband noise reduction.
-    let nr = 6.0 + 21.0 * i;
+    // 70 Hz (gentle) → 110 Hz (firmer wind/rumble cut).
+    let highpass = 70.0 + 40.0 * i;
+    // 6 dB (subtle) → 20 dB (strong) of broadband noise reduction. Kept below
+    // afftdn's heavy range, where speech harmonics start to smear/muffle.
+    let nr = 6.0 + 14.0 * i;
+    // High-shelf gain to counteract the dulling the denoiser introduces; scales
+    // with how hard we denoise.
+    let presence = 2.0 + 2.0 * i;
     format!(
-        "highpass=f={highpass:.0},afftdn=nr={nr:.1}:nf=-25,adeclick",
+        "highpass=f={highpass:.0},afftdn=nr={nr:.1}:nf=-30,adeclick,treble=g={presence:.1}:f=3000",
         highpass = highpass,
         nr = nr,
+        presence = presence,
     )
 }
 
