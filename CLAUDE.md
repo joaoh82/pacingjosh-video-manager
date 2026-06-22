@@ -126,9 +126,12 @@ SQLite at `backend-rust/data/database.db`. Key relationships:
 
 ## CI / Releases
 
+Releases are **tag-driven and manually triggered** — merging to `main` never releases on its own.
+
 - **`.github/workflows/ci.yml`** — runs on PRs to `main`: frontend lint + build, backend Clippy + tests.
-- **`.github/workflows/release.yml`** — runs on push to `main`: Conventional-Commits versioning (`mathieudutour/github-tag-action`), bumps all manifests via `scripts/bump-version.mjs`, then builds + publishes Win/macOS(arm64)/Linux installers via `tauri-apps/tauri-action`. CI fetches FFmpeg sidecars with `scripts/fetch-ffmpeg-ci.mjs` and regenerates icons from `images/Logo.png`.
-- Versioning needs a `v1.0.0` baseline git tag to bump from; releases skip when only `chore`/`docs`/`ci`/`refactor`/`test` commits land.
+- **`.github/workflows/tag-release.yml`** — manual `workflow_dispatch`. Derives the next version from Conventional Commits since the last tag (`mathieudutour/github-tag-action`, dry-run), bumps all manifests via `scripts/bump-version.mjs`, commits to `main`, pushes the `vX.Y.Z` tag, then calls `release.yml` via `workflow_call`. A `default_bump` input forces a bump when no conventional commits exist.
+- **`.github/workflows/release.yml`** — builds + publishes Win/macOS(arm64)/Linux installers via `tauri-apps/tauri-action` for a tag. Triggers: `push` of a `v*.*.*` tag, `workflow_call` (the normal path, from tag-release), or `workflow_dispatch` to rebuild an existing tag. Fetches FFmpeg sidecars with `scripts/fetch-ffmpeg-ci.mjs`; regenerates icons from the square `images/icon.png`.
+- The automated path uses `workflow_call` (not a PAT) because a tag pushed by `GITHUB_TOKEN` can't trigger `push: tags`. A `v1.0.0` baseline tag exists for versioning to bump from.
 
 ## External Dependencies
 

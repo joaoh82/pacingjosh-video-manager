@@ -1,90 +1,75 @@
 name: Release
 
-# On merge to main:
-#   1. Compute the next version from Conventional Commits since the last tag.
-#      (feat -> minor, fix -> patch, feat!/BREAKING CHANGE -> major. If nothing
-#       releasable was merged, the whole run is a no-op.)
-#   2. Bump the version in every file, commit + tag, and open a draft release.
-#   3. Build signed-less installers for Windows, macOS (Apple Silicon) and Linux
-#      and attach them to the release.
-#   4. Publish (un-draft) the release once all platforms succeed.
+# Builds and publishes cross-platform installers for a TAG.
 #
-# The version commit is pushed with the default GITHUB_TOKEN, whose pushes do
-# not re-trigger workflows, so there is no release loop ([skip ci] is added too).
+# Triggered three ways:
+#   - push of a `v*.*.*` tag (e.g. you run `git push origin v1.2.0` by hand)
+#   - called by the "Bump & Tag" workflow right after it creates a tag
+#     (workflow_call) — this is the normal path
+#   - manually from the Actions tab to (re)build an existing tag (workflow_dispatch)
+#
+# Note: a tag pushed by the default GITHUB_TOKEN does NOT fire the `push: tags`
+# trigger (GitHub blocks that to prevent loops), which is exactly why the
+# automated path uses workflow_call instead — no PAT required, no double build.
 
 on:
   push:
-    branches: [main]
+    tags: ['v*.*.*']
+  workflow_call:
+    inputs:
+      tag:
+        description: Tag to build (e.g. v1.2.0)
+        required: true
+        type: string
+      release_body:
+        description: Release notes body (falls back to auto-generated notes if empty)
+        required: false
+        type: string
+        default: ''
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to (re)build (e.g. v1.2.0)
+        required: true
+        type: string
 
 concurrency:
-  group: release
+  group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 permissions:
   contents: write
 
 jobs:
-  version:
-    name: Determine version
+  prepare:
+    name: Create draft release
     runs-on: ubuntu-latest
     outputs:
-      release_created: ${{ steps.decide.outputs.release_created }}
-      new_version: ${{ steps.tag.outputs.new_version }}
-      new_tag: ${{ steps.tag.outputs.new_tag }}
-      release_id: ${{ steps.create_release.outputs.id }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      release_id: ${{ steps.create.outputs.id }}
     steps:
+      - name: Resolve tag
+        id: resolve
+        run: echo "tag=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-
-      - name: Compute next version (Conventional Commits)
-        id: tag
-        uses: mathieudutour/github-tag-action@v6.2
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          default_bump: false
-          dry_run: true
-
-      - name: Decide whether to release
-        id: decide
-        run: |
-          if [ -z "${{ steps.tag.outputs.release_type }}" ]; then
-            echo "No releasable commits since last tag — skipping release."
-            echo "release_created=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "Releasing ${{ steps.tag.outputs.new_tag }} (${{ steps.tag.outputs.release_type }})."
-            echo "release_created=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Bump version files
-        if: steps.decide.outputs.release_created == 'true'
-        run: node scripts/bump-version.mjs "${{ steps.tag.outputs.new_version }}"
-
-      - name: Commit, tag and push
-        if: steps.decide.outputs.release_created == 'true'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -am "chore(release): ${{ steps.tag.outputs.new_tag }} [skip ci]"
-          git tag "${{ steps.tag.outputs.new_tag }}"
-          git push origin HEAD:main
-          git push origin "${{ steps.tag.outputs.new_tag }}"
+          ref: ${{ steps.resolve.outputs.tag }}
 
       - name: Create draft release
-        id: create_release
-        if: steps.decide.outputs.release_created == 'true'
+        id: create
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.tag.outputs.new_tag }}
-          name: ${{ steps.tag.outputs.new_tag }}
-          body: ${{ steps.tag.outputs.changelog }}
+          tag_name: ${{ steps.resolve.outputs.tag }}
+          name: ${{ steps.resolve.outputs.tag }}
+          body: ${{ inputs.release_body }}
+          generate_release_notes: ${{ !inputs.release_body }}
           draft: true
           prerelease: false
 
   build:
     name: Build (${{ matrix.target }})
-    needs: version
-    if: needs.version.outputs.release_created == 'true'
+    needs: prepare
     strategy:
       fail-fast: false
       matrix:
@@ -102,7 +87,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.version.outputs.new_tag }}
+          ref: ${{ needs.prepare.outputs.tag }}
 
       - uses: actions/setup-node@v4
         with:
@@ -148,19 +133,18 @@ jobs:
           # Windows: configure a signing command in tauri.conf.json
         with:
           projectPath: src-tauri
-          releaseId: ${{ needs.version.outputs.release_id }}
+          releaseId: ${{ needs.prepare.outputs.release_id }}
           args: ${{ matrix.args }}
 
   publish:
     name: Publish release
-    needs: [version, build]
-    if: needs.version.outputs.release_created == 'true'
+    needs: [prepare, build]
     runs-on: ubuntu-latest
     steps:
       - name: Un-draft the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release edit "${{ needs.version.outputs.new_tag }}" \
+          gh release edit "${{ needs.prepare.outputs.tag }}" \
             --draft=false \
             --repo "${{ github.repository }}"
