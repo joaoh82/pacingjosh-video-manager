@@ -318,6 +318,27 @@ pub fn extract_audio(video_path: &Path, out_dir: &Path) -> Result<PathBuf, Strin
     }
 }
 
+/// Build the audio-filter chain for "Enhance voice" (CapCut-style noise removal)
+/// at `intensity` (0.0–1.0). Higher intensity removes more noise:
+///   * `highpass` rolls off low-frequency wind/handling rumble (cutoff rises with
+///     intensity),
+///   * `afftdn` is an FFT denoiser that knocks down steady background hiss (its
+///     noise-reduction amount in dB rises with intensity),
+///   * `adeclick` removes impulsive mouth clicks/pops.
+/// All three are built into FFmpeg, so no external model file is needed.
+pub fn voice_enhance_filter(intensity: f32) -> String {
+    let i = intensity.clamp(0.0, 1.0);
+    // 70 Hz (gentle) → 120 Hz (aggressive wind/rumble cut).
+    let highpass = 70.0 + 50.0 * i;
+    // 6 dB (subtle) → 27 dB (heavy) of broadband noise reduction.
+    let nr = 6.0 + 21.0 * i;
+    format!(
+        "highpass=f={highpass:.0},afftdn=nr={nr:.1}:nf=-25,adeclick",
+        highpass = highpass,
+        nr = nr,
+    )
+}
+
 /// Extract a single clip `[start, end)` (seconds) from `input` and normalize it
 /// to a fixed `width`x`height`/`fps`, H.264 + AAC, yuv420p. Normalizing every
 /// segment to the same spec lets the final concat use stream copy.
@@ -327,7 +348,11 @@ pub fn extract_audio(video_path: &Path, out_dir: &Path) -> Result<PathBuf, Strin
 /// ffmpeg is run with its working directory set to the output folder, which
 /// sidesteps the `subtitles` filter's painful path escaping on Windows.
 ///
+/// When `audio_filter` is set, it is applied to the audio with `-af` (used for
+/// the optional "Enhance voice" noise removal — see [`voice_enhance_filter`]).
+///
 /// Returns an error (with the tail of ffmpeg's stderr) on failure.
+#[allow(clippy::too_many_arguments)]
 pub fn extract_clip_segment(
     input: &Path,
     start: f32,
@@ -337,6 +362,7 @@ pub fn extract_clip_segment(
     fps: f32,
     out_path: &Path,
     subtitle_name: Option<&str>,
+    audio_filter: Option<&str>,
 ) -> Result<(), String> {
     let duration = end - start;
     if duration <= 0.0 {
@@ -374,13 +400,17 @@ pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps={fps}",
             cmd.current_dir(p);
         }
     }
-    let output = cmd
-        .arg("-i")
+    cmd.arg("-i")
         .arg(input)
         // Accurate (output-side) seek so cut points match the chosen timestamps.
         .args(["-ss", &format!("{}", start), "-t", &format!("{}", duration)])
+        .args(["-vf", &vf]);
+    // Optional voice-enhancement (noise removal) on the audio track.
+    if let Some(af) = audio_filter.filter(|s| !s.is_empty()) {
+        cmd.args(["-af", af]);
+    }
+    let output = cmd
         .args([
-            "-vf", &vf,
             "-c:v", "libx264",
             "-preset", "veryfast",
             "-crf", "20",

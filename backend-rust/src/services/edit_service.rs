@@ -179,6 +179,14 @@ pub struct EditOptions {
     pub tighten: bool,
     /// When tightening, remove silence/filler gaps longer than this many seconds.
     pub tighten_gap: f32,
+    /// "Enhance voice": the take (video) ids whose audio should be cleaned up
+    /// (wind/rumble, background hiss, mouth clicks) while cutting their clips.
+    /// Empty → no enhancement.
+    #[serde(default)]
+    pub enhance_voice_video_ids: Vec<i32>,
+    /// Voice-enhancement intensity, 0.0–1.0 (how aggressively to remove noise).
+    #[serde(default)]
+    pub enhance_voice_intensity: f32,
 }
 
 /// Start a background edit pipeline for a production. Returns the job id used to
@@ -543,14 +551,26 @@ fn rerender_inner(
         log_msg(edit_map, job_id, &format!("Muting music in {} selected region(s).", mute.len()));
     }
 
-    let mut edl_value = build_edl_json(production_id, production_title, ai, cut_list, &output_path, opts.captions, music_name.as_deref());
+    let mut edl_value = build_edl_json(
+        production_id,
+        production_title,
+        ai,
+        cut_list,
+        &output_path,
+        opts.captions,
+        music_name.as_deref(),
+        &opts.enhance_voice_video_ids,
+        opts.enhance_voice_intensity,
+    );
     edl_value["timeline"] = build_timeline(cut_list, &speech, &duck, opts, music_name.as_deref());
     let pretty = serde_json::to_string_pretty(&edl_value).unwrap_or_else(|_| "{}".to_string());
     std::fs::write(&edl_path, &pretty).map_err(|e| format!("Failed to write EDL JSON: {}", e))?;
 
     let work_dir = out_dir.join(format!(".work-{}", job_id));
     assemble_final(
-        edit_map, job_id, cut_list, transcripts, opts.captions, &[], &work_dir, &output_path,
+        edit_map, job_id, cut_list, transcripts, opts.captions,
+        &opts.enhance_voice_video_ids, opts.enhance_voice_intensity,
+        &[], &work_dir, &output_path,
         music_path.as_deref(), opts.music_volume, opts.music_duck_volume, &duck,
     )?;
 
@@ -748,6 +768,8 @@ fn run_edit_inner(
         &output_path,
         opts.captions,
         music_name.as_deref(),
+        &opts.enhance_voice_video_ids,
+        opts.enhance_voice_intensity,
     );
     edl_value["timeline"] = build_timeline(&cut_list, &speech_timeline, &speech_timeline, opts, music_name.as_deref());
     let pretty = serde_json::to_string_pretty(&edl_value).unwrap_or_else(|_| "{}".to_string());
@@ -762,6 +784,8 @@ fn run_edit_inner(
         &cut_list,
         &transcripts,
         opts.captions,
+        &opts.enhance_voice_video_ids,
+        opts.enhance_voice_intensity,
         takes,
         &work_dir,
         &output_path,
@@ -790,6 +814,8 @@ fn assemble_final(
     cut_list: &[ResolvedClipInternal],
     transcripts: &HashMap<i32, Vec<TranscriptWord>>,
     captions: bool,
+    enhance_ids: &[i32],
+    enhance_intensity: f32,
     takes_for_spec: &[TakeMeta],
     work_dir: &std::path::Path,
     output_path: &std::path::Path,
@@ -819,12 +845,34 @@ fn assemble_final(
 
     std::fs::create_dir_all(work_dir).map_err(|e| format!("Failed to create work dir: {}", e))?;
 
-    let mut segments: Vec<PathBuf> = Vec::with_capacity(cut_list.len());
-    for (i, clip) in cut_list.iter().enumerate() {
+    let enhance_clips = cut_list.iter().filter(|c| enhance_ids.contains(&c.video_id)).count();
+    if enhance_clips > 0 {
         log_msg(
             edit_map,
             job_id,
-            &format!("Cutting clip {}/{}: {} [{:.2}s–{:.2}s]", i + 1, cut_list.len(), clip.filename, clip.start, clip.end),
+            &format!(
+                "Enhancing voice (removing background noise) on {} clip(s) at {}% intensity.",
+                enhance_clips,
+                (enhance_intensity.clamp(0.0, 1.0) * 100.0).round()
+            ),
+        );
+    }
+
+    let mut segments: Vec<PathBuf> = Vec::with_capacity(cut_list.len());
+    for (i, clip) in cut_list.iter().enumerate() {
+        let enhance = enhance_ids.contains(&clip.video_id);
+        log_msg(
+            edit_map,
+            job_id,
+            &format!(
+                "Cutting clip {}/{}: {} [{:.2}s–{:.2}s]{}",
+                i + 1,
+                cut_list.len(),
+                clip.filename,
+                clip.start,
+                clip.end,
+                if enhance { " · voice enhanced" } else { "" }
+            ),
         );
 
         let sub_name = if captions {
@@ -842,6 +890,12 @@ fn assemble_final(
             None
         };
 
+        let audio_filter = if enhance {
+            Some(ffmpeg_service::voice_enhance_filter(enhance_intensity))
+        } else {
+            None
+        };
+
         let seg = work_dir.join(format!("seg_{:04}.mp4", i));
         ffmpeg_service::extract_clip_segment(
             std::path::Path::new(&clip.file_path),
@@ -852,6 +906,7 @@ fn assemble_final(
             target_fps,
             &seg,
             sub_name.as_deref(),
+            audio_filter.as_deref(),
         )?;
         segments.push(seg);
         update(edit_map, job_id, |p| p.processed = (i + 1) as i64);
@@ -1096,6 +1151,7 @@ fn resolve_plan(raw: &str, takes: &[TakeMeta]) -> Result<Vec<ResolvedClipInterna
 
 /// Build the EDL JSON deliverable, grouped by scene (as returned by the model)
 /// but using only the validated clips.
+#[allow(clippy::too_many_arguments)]
 fn build_edl_json(
     production_id: i32,
     production_title: &str,
@@ -1104,6 +1160,8 @@ fn build_edl_json(
     output_path: &std::path::Path,
     captions: bool,
     music: Option<&str>,
+    enhance_ids: &[i32],
+    enhance_intensity: f32,
 ) -> serde_json::Value {
     let clips: Vec<serde_json::Value> = resolved
         .iter()
@@ -1117,9 +1175,12 @@ fn build_edl_json(
                 "end": round2(c.end),
                 "duration": round2(c.end - c.start),
                 "reason": c.reason,
+                "enhanced": enhance_ids.contains(&c.video_id),
             })
         })
         .collect();
+
+    let any_enhanced = resolved.iter().any(|c| enhance_ids.contains(&c.video_id));
 
     serde_json::json!({
         "production_id": production_id,
@@ -1130,6 +1191,10 @@ fn build_edl_json(
         "text_model": ai.text_model,
         "captions": captions,
         "music": music,
+        "voice_enhance": {
+            "enabled": any_enhanced,
+            "intensity": round2(enhance_intensity.clamp(0.0, 1.0)),
+        },
         "clips": clips,
         "output": output_path.file_name().map(|f| f.to_string_lossy().to_string()),
     })

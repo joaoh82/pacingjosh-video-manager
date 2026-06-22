@@ -164,6 +164,17 @@ export async function getVideos(
   return fetchApi<VideoListResponse>(`/api/videos${query ? `?${query}` : ''}`);
 }
 
+/**
+ * Fetch the takes (videos) linked to a production, oldest first. Used by the
+ * Edit pipeline to offer per-take options (e.g. "Enhance voice").
+ */
+export async function getProductionVideos(productionId: number): Promise<Video[]> {
+  const res = await fetchApi<VideoListResponse>(
+    `/api/videos?production=${productionId}&limit=500&sort=date_asc`
+  );
+  return res.videos;
+}
+
 export async function updateVideo(id: number, data: VideoUpdate): Promise<Video> {
   return fetchApi<Video>(`/api/videos/${id}`, {
     method: 'PUT',

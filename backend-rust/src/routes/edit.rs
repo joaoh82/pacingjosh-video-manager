@@ -15,6 +15,7 @@ fn default_music_volume() -> f32 { 0.3 }
 fn default_music_duck_volume() -> f32 { 0.08 }
 fn default_music_min_gap() -> f32 { 1.5 }
 fn default_tighten_gap() -> f32 { 1.5 }
+fn default_enhance_intensity() -> f32 { 0.6 }
 
 #[derive(Deserialize)]
 pub struct StartEditRequest {
@@ -51,6 +52,13 @@ pub struct StartEditRequest {
     /// When tightening, remove silence/filler gaps longer than this many seconds.
     #[serde(default = "default_tighten_gap")]
     pub tighten_gap: f32,
+    /// "Enhance voice": take (video) ids whose audio should be cleaned up
+    /// (wind/rumble, background hiss, mouth clicks). Empty → no enhancement.
+    #[serde(default)]
+    pub enhance_voice: Vec<i32>,
+    /// Voice-enhancement intensity, 0.0–1.0 (how aggressively to remove noise).
+    #[serde(default = "default_enhance_intensity")]
+    pub enhance_voice_intensity: f32,
 }
 
 /// Kick off the edit pipeline for a production. Returns a job id to poll.
@@ -77,6 +85,8 @@ async fn start_edit(
         music_min_gap: body.music_min_gap,
         tighten: body.tighten,
         tighten_gap: body.tighten_gap,
+        enhance_voice_video_ids: body.enhance_voice.clone(),
+        enhance_voice_intensity: body.enhance_voice_intensity,
     };
 
     match edit_service::start_edit(
