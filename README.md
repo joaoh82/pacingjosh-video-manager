@@ -9,6 +9,8 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/joaoh82/pacingjosh-video-manager/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/joaoh82/pacingjosh-video-manager/actions/workflows/ci.yml/badge.svg" /></a>
+  <a href="https://github.com/joaoh82/pacingjosh-video-manager/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/joaoh82/pacingjosh-video-manager?label=download&logo=github" /></a>
   <img alt="Rust" src="https://img.shields.io/badge/Rust-CE412B?logo=rust&logoColor=white" />
   <img alt="Actix-web" src="https://img.shields.io/badge/Actix--web-1B1B1B?logo=rust&logoColor=white" />
   <img alt="Tauri" src="https://img.shields.io/badge/Tauri-24C8DB?logo=tauri&logoColor=black" />
@@ -28,6 +30,20 @@
 <p align="center">
   <i>Created to help manage my own videos for my YouTube channel <a href="https://www.youtube.com/@pacingjosh">Pacing Josh</a></i>
 </p>
+
+## ⬇️ Download & Install
+
+Pre-built installers for every release are published on the **[Releases page →](https://github.com/joaoh82/pacingjosh-video-manager/releases/latest)**. FFmpeg is bundled inside the app — end users don't need to install anything else.
+
+| OS | Download | Install |
+| --- | --- | --- |
+| **Windows** | `...x64-setup.exe` (NSIS) or `...x64_en-US.msi` | Run the installer. Builds are unsigned, so SmartScreen may warn — click **More info → Run anyway**. |
+| **macOS** (Apple Silicon) | `...aarch64.dmg` | Open the DMG and drag **Video Manager** to Applications. Unsigned, so on first launch **right-click → Open** — or run `xattr -dr com.apple.quarantine "/Applications/Video Manager.app"`. |
+| **Linux** | `...amd64.AppImage` or `...amd64.deb` | **AppImage:** `chmod +x ./*.AppImage && ./*.AppImage`. **Deb:** `sudo apt install ./<file>.deb`. |
+
+> macOS builds currently target **Apple Silicon (M-series)**; they run on Intel Macs via Rosetta 2. See [Releases & CI](#releases--ci) to add a native Intel/universal build.
+>
+> Installers are **unsigned** (no code-signing certificates are configured), so the OS shows the usual "unverified developer" prompts. [Releases & CI](#releases--ci) explains how to enable signing.
 
 ## Features
 
@@ -177,7 +193,7 @@ cd pacingjosh-video-manager
 # First-time setup
 cargo install tauri-cli --version "^2.0"
 bash scripts/fetch-ffmpeg.sh        # or scripts\fetch-ffmpeg.ps1 on Windows
-cargo tauri icon images/Logo.png    # generate app icons
+cargo tauri icon images/icon.png    # generate app icons (square 512x512 source)
 
 # Run in dev mode (launches Next.js + Tauri window)
 cargo tauri dev                     # run from repo root; finds src-tauri/ automatically
@@ -521,9 +537,14 @@ pacingjosh-video-manager/
 │       ├── components/         # React components
 │       ├── lib/                # API client & types
 │       └── styles/             # Global styles
+├── .github/workflows/          # CI (PRs) + Release (build & publish on merge)
+│   ├── ci.yml
+│   └── release.yml
 ├── scripts/
-│   ├── fetch-ffmpeg.sh         # Download FFmpeg sidecars (macOS/Linux)
-│   └── fetch-ffmpeg.ps1        # Download FFmpeg sidecars (Windows)
+│   ├── fetch-ffmpeg.sh         # Download FFmpeg sidecars (macOS/Linux, local dev)
+│   ├── fetch-ffmpeg.ps1        # Download FFmpeg sidecars (Windows, local dev)
+│   ├── fetch-ffmpeg-ci.mjs     # Uniform sidecar fetch used by the release workflow
+│   └── bump-version.mjs        # Bump version across all manifests (used by release)
 ├── backend/                    # [DEPRECATED] Python/FastAPI backend
 ├── remotion-demo/              # Remotion project that renders the README demo (mp4 + gif)
 └── images/                     # Screenshots, branding & rendered demo (demo.mp4 / demo.gif)
@@ -600,15 +621,40 @@ Future enhancements planned:
 - Advanced AI features (face detection, transcription)
 - Collaborative features and sharing
 
+## Releases & CI
+
+Two GitHub Actions workflows automate quality checks and releases:
+
+- **CI** (`.github/workflows/ci.yml`) runs on every pull request to `main`: it lints and builds the frontend, and runs Clippy + tests on the Rust backend.
+- **Release** (`.github/workflows/release.yml`) runs on every push to `main` and is driven by [Conventional Commits](https://www.conventionalcommits.org/):
+
+  | Commit type | Example | Version bump |
+  | --- | --- | --- |
+  | `fix:` | `fix: correct thumbnail aspect ratio` | patch (`1.0.0 → 1.0.1`) |
+  | `feat:` | `feat: add bulk tagging` | minor (`1.0.0 → 1.1.0`) |
+  | `feat!:` / `BREAKING CHANGE:` | `feat!: drop legacy API` | major (`1.0.0 → 2.0.0`) |
+  | `chore:` / `docs:` / `ci:` / `refactor:` / `test:` only | — | **no release** |
+
+  When a releasable commit lands on `main`, the workflow bumps the version in every manifest (`tauri.conf.json`, `frontend/package.json`, both `Cargo.toml`s + lockfiles), commits + tags it, then builds installers for **Windows, macOS (Apple Silicon) and Linux** and publishes them to a GitHub Release.
+
+**Tip:** if you squash-merge PRs, set the **PR title** to a conventional message (e.g. `feat: …`) — that becomes the squash commit subject the release workflow reads.
+
+### One-time setup notes
+
+- **Baseline tag.** Versioning bumps from the latest `v*` git tag, so a `v1.0.0` baseline tag must exist for the first automated release to bump from `1.0.0` (e.g. to `1.1.0`) instead of starting at `0.x`: `git tag v1.0.0 && git push origin v1.0.0`.
+- **Branch protection.** If `main` is protected against direct pushes, allow `github-actions[bot]` to bypass it (or swap the default `GITHUB_TOKEN` for a PAT) so the release commit + tag can be pushed.
+- **Code signing.** Installers are unsigned by default. To sign, add the Apple/Windows signing secrets referenced in `release.yml` (macOS) and a signing command in `tauri.conf.json` (Windows).
+- **Adding Intel macOS.** Add a matrix entry (`platform: macos-13`, `target: x86_64-apple-darwin`, `args: --target x86_64-apple-darwin`) — the sidecar fetch and icon steps already adapt to the host arch.
+
 ## Contributing
 
 Contributions, issues, and feature requests are welcome!
 
 1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+2. Create your feature branch (`git switch -c feat/amazing-feature`)
+3. Commit using [Conventional Commits](https://www.conventionalcommits.org/) (e.g. `git commit -m 'feat: add amazing feature'`)
+4. Push to the branch (`git push origin feat/amazing-feature`)
+5. Open a Pull Request with a conventional title — it drives the next version (see [Releases & CI](#releases--ci))
 
 ## License
 
