@@ -623,28 +623,35 @@ Future enhancements planned:
 
 ## Releases & CI
 
-Two GitHub Actions workflows automate quality checks and releases:
+Releases are **tag-driven** and triggered by hand — merging a PR never releases on its own.
 
 - **CI** (`.github/workflows/ci.yml`) runs on every pull request to `main`: it lints and builds the frontend, and runs Clippy + tests on the Rust backend.
-- **Release** (`.github/workflows/release.yml`) runs on every push to `main` and is driven by [Conventional Commits](https://www.conventionalcommits.org/):
+- **Bump & Tag** (`.github/workflows/tag-release.yml`) is the manual release button. Run it from the **Actions** tab after merging your PRs. It computes the next version from [Conventional Commits](https://www.conventionalcommits.org/) since the last tag, bumps every manifest, commits, tags `vX.Y.Z`, and kicks off the build.
+- **Release** (`.github/workflows/release.yml`) builds installers for **Windows, macOS (Apple Silicon) and Linux** and publishes them to a GitHub Release for the tag.
 
-  | Commit type | Example | Version bump |
-  | --- | --- | --- |
-  | `fix:` | `fix: correct thumbnail aspect ratio` | patch (`1.0.0 → 1.0.1`) |
-  | `feat:` | `feat: add bulk tagging` | minor (`1.0.0 → 1.1.0`) |
-  | `feat!:` / `BREAKING CHANGE:` | `feat!: drop legacy API` | major (`1.0.0 → 2.0.0`) |
-  | `chore:` / `docs:` / `ci:` / `refactor:` / `test:` only | — | **no release** |
+The version **increment** is derived from the commits since the last tag:
 
-  When a releasable commit lands on `main`, the workflow bumps the version in every manifest (`tauri.conf.json`, `frontend/package.json`, both `Cargo.toml`s + lockfiles), commits + tags it, then builds installers for **Windows, macOS (Apple Silicon) and Linux** and publishes them to a GitHub Release.
+| Commit type | Example | Version bump |
+| --- | --- | --- |
+| `fix:` | `fix: correct thumbnail aspect ratio` | patch (`1.0.0 → 1.0.1`) |
+| `feat:` | `feat: add bulk tagging` | minor (`1.0.0 → 1.1.0`) |
+| `feat!:` / `BREAKING CHANGE:` | `feat!: drop legacy API` | major (`1.0.0 → 2.0.0`) |
+| only `chore`/`docs`/`ci`/`refactor`/`test` | — | no bump (run **Bump & Tag** with the `default_bump` input to force one) |
 
-**Tip:** if you squash-merge PRs, set the **PR title** to a conventional message (e.g. `feat: …`) — that becomes the squash commit subject the release workflow reads.
+### Cutting a release
 
-### One-time setup notes
+1. Merge your PRs to `main` (CI green).
+2. **Actions → Bump & Tag → Run workflow.** Leave `default_bump` as `false` to use the commit-derived bump, or pick `patch`/`minor`/`major` to force one.
+3. It bumps the manifests, tags `vX.Y.Z`, and the Release workflow attaches the installers to the GitHub Release.
 
-- **Baseline tag.** Versioning bumps from the latest `v*` git tag, so a `v1.0.0` baseline tag must exist for the first automated release to bump from `1.0.0` (e.g. to `1.1.0`) instead of starting at `0.x`: `git tag v1.0.0 && git push origin v1.0.0`.
-- **Branch protection.** If `main` is protected against direct pushes, allow `github-actions[bot]` to bypass it (or swap the default `GITHUB_TOKEN` for a PAT) so the release commit + tag can be pushed.
+You can also release **without** the button: bump the version files yourself and `git tag vX.Y.Z && git push origin vX.Y.Z` — pushing a `v*` tag triggers the Release workflow directly. To re-build an existing tag, use **Actions → Release → Run workflow** and pass the tag.
+
+### Setup notes
+
+- **Baseline tag.** Versioning bumps from the latest `v*` tag; a `v1.0.0` baseline tag already exists. (To re-seed: `git tag v1.0.0 <commit> && git push origin v1.0.0`.)
+- **Branch protection.** Bump & Tag commits the version bump to `main`. If `main` is protected against direct pushes, allow `github-actions[bot]` to bypass it (or swap the default `GITHUB_TOKEN` for a PAT).
 - **Code signing.** Installers are unsigned by default. To sign, add the Apple/Windows signing secrets referenced in `release.yml` (macOS) and a signing command in `tauri.conf.json` (Windows).
-- **Adding Intel macOS.** Add a matrix entry (`platform: macos-13`, `target: x86_64-apple-darwin`, `args: --target x86_64-apple-darwin`) — the sidecar fetch and icon steps already adapt to the host arch.
+- **Adding Intel macOS.** Add a matrix entry to `release.yml` (`platform: macos-13`, `target: x86_64-apple-darwin`, `args: --target x86_64-apple-darwin`) — the sidecar fetch and icon steps already adapt to the host arch.
 
 ## Contributing
 
@@ -654,7 +661,7 @@ Contributions, issues, and feature requests are welcome!
 2. Create your feature branch (`git switch -c feat/amazing-feature`)
 3. Commit using [Conventional Commits](https://www.conventionalcommits.org/) (e.g. `git commit -m 'feat: add amazing feature'`)
 4. Push to the branch (`git push origin feat/amazing-feature`)
-5. Open a Pull Request with a conventional title — it drives the next version (see [Releases & CI](#releases--ci))
+5. Open a Pull Request with a conventional title — it determines the version bump applied the next time a release is tagged (see [Releases & CI](#releases--ci))
 
 ## License
 
