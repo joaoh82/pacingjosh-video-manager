@@ -45,7 +45,7 @@ npm run lint                  # ESLint
 # First-time setup
 cargo install tauri-cli --version "^2.0"
 bash scripts/fetch-ffmpeg.sh      # or scripts\fetch-ffmpeg.ps1 on Windows
-cargo tauri icon images/Logo.png  # generate icons from the repo logo
+cargo tauri icon images/icon.png  # generate icons from the square (512x512) source
 
 # Dev mode — launches Next.js dev server + Tauri window (run from repo root)
 cargo tauri dev
@@ -120,8 +120,15 @@ SQLite at `backend-rust/data/database.db`. Key relationships:
 
 ## Known Issues
 
-- Pre-existing ESLint errors in `settings/page.tsx` and `setup/page.tsx` (unescaped `'` entities)
+- `npm run lint` passes but emits warnings (`react-hooks/exhaustive-deps`, `@next/next/no-img-element`); these are non-blocking in CI
+- The Rust code is not fully `rustfmt`-clean, so the CI `cargo fmt --check` step is advisory (non-blocking); Clippy and tests are the hard gates
 - No test suite exists yet
+
+## CI / Releases
+
+- **`.github/workflows/ci.yml`** — runs on PRs to `main`: frontend lint + build, backend Clippy + tests.
+- **`.github/workflows/release.yml`** — runs on push to `main`: Conventional-Commits versioning (`mathieudutour/github-tag-action`), bumps all manifests via `scripts/bump-version.mjs`, then builds + publishes Win/macOS(arm64)/Linux installers via `tauri-apps/tauri-action`. CI fetches FFmpeg sidecars with `scripts/fetch-ffmpeg-ci.mjs` and regenerates icons from `images/Logo.png`.
+- Versioning needs a `v1.0.0` baseline git tag to bump from; releases skip when only `chore`/`docs`/`ci`/`refactor`/`test` commits land.
 
 ## External Dependencies
 
