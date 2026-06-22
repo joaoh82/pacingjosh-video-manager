@@ -173,6 +173,10 @@ pub struct RerenderRequest {
     /// "bursts" the user removed on the timeline.
     #[serde(default)]
     pub mute: Vec<MuteRegion>,
+    /// Clip `order`s (1-based, as in the EDL) the user marked for voice
+    /// enhancement on the timeline.
+    #[serde(default)]
+    pub enhance_clips: Vec<i32>,
 }
 
 #[derive(Deserialize)]
@@ -197,6 +201,7 @@ async fn rerender_edit(
     match edit_service::start_rerender(
         edit_id,
         mute,
+        body.enhance_clips.clone(),
         pool.get_ref().clone(),
         config.get_ai_settings(),
         edit_map.get_ref().clone(),

@@ -166,6 +166,8 @@ export interface TimelineClip {
   /** Range taken from the source take (seconds). */
   source_start: number;
   source_end: number;
+  /** Whether voice enhancement (noise removal) was applied to this clip. */
+  enhanced?: boolean;
 }
 
 /** A speech interval on the final timeline (where the music ducks). */

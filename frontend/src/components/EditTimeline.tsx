@@ -39,10 +39,18 @@ function regionsFrom(duck: TimelineSpeech[], duration: number) {
   return regions;
 }
 
+/** Pending timeline edits collected for a re-render. */
+export interface TimelineEdits {
+  /** Music regions (seconds) to remove. */
+  mute: { start: number; end: number }[];
+  /** Clip `order`s to apply voice enhancement to. */
+  enhanceClips: number[];
+}
+
 interface EditTimelineProps {
   timeline: Timeline;
-  /** Re-render the run with these music regions muted (null disables editing). */
-  onRerender?: (mute: { start: number; end: number }[]) => void;
+  /** Re-render the run with these timeline edits (undefined disables editing). */
+  onRerender?: (edits: TimelineEdits) => void;
   busy?: boolean;
 }
 
@@ -52,9 +60,14 @@ export default function EditTimeline({ timeline, onRerender, busy }: EditTimelin
   const [containerW, setContainerW] = useState(0);
   const [zoom, setZoom] = useState(1);
   const [muted, setMuted] = useState<{ start: number; end: number }[]>([]);
+  // Clip `order`s the user selected to enhance on the next re-render.
+  const [selectedClips, setSelectedClips] = useState<number[]>([]);
 
-  // Reset selection when the underlying run changes.
-  useEffect(() => setMuted([]), [timeline]);
+  // Reset selections when the underlying run changes.
+  useEffect(() => {
+    setMuted([]);
+    setSelectedClips([]);
+  }, [timeline]);
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -79,14 +92,25 @@ export default function EditTimeline({ timeline, onRerender, busy }: EditTimelin
   const duckIntervals = timeline.duck && timeline.duck.length ? timeline.duck : timeline.speech;
   const regions = regionsFrom(duckIntervals, dur);
 
+  const editable = !!onRerender && !busy;
+  const musicEditable = editable && music.present;
+
   const isMuted = (r: { start: number; end: number }) =>
     muted.some((m) => Math.abs(m.start - r.start) < 0.01 && Math.abs(m.end - r.end) < 0.01);
   const toggleMute = (r: { start: number; end: number }) => {
-    if (!onRerender || busy) return;
+    if (!musicEditable) return;
     setMuted((prev) =>
       isMuted(r)
         ? prev.filter((m) => !(Math.abs(m.start - r.start) < 0.01 && Math.abs(m.end - r.end) < 0.01))
         : [...prev, { start: r.start, end: r.end }]
+    );
+  };
+
+  const isSelected = (order: number) => selectedClips.includes(order);
+  const toggleSelectClip = (order: number) => {
+    if (!editable) return;
+    setSelectedClips((prev) =>
+      prev.includes(order) ? prev.filter((o) => o !== order) : [...prev, order]
     );
   };
 
@@ -130,17 +154,32 @@ export default function EditTimeline({ timeline, onRerender, busy }: EditTimelin
         </button>
         <span className="text-[10px] text-gray-400 dark:text-gray-500">{zoom.toFixed(1)}×</span>
         <div className="flex-1" />
-        {onRerender && (
-          <button
-            type="button"
-            onClick={() => onRerender(muted)}
-            disabled={busy || muted.length === 0}
-            className="btn btn-primary text-xs whitespace-nowrap disabled:opacity-40"
-            title="Re-render a new version with the selected music removed"
-          >
-            {busy ? 'Re-rendering…' : `Re-render without ${muted.length} clip${muted.length !== 1 ? 's' : ''}`}
-          </button>
-        )}
+        {onRerender &&
+          (() => {
+            const nEnh = selectedClips.length;
+            const nMute = muted.length;
+            const has = nEnh + nMute > 0;
+            const label = busy
+              ? 'Re-rendering…'
+              : nEnh && nMute
+              ? `Re-render · ${nEnh} enhanced, ${nMute} music`
+              : nEnh
+              ? `✨ Enhance voice — re-render (${nEnh})`
+              : nMute
+              ? `Re-render without ${nMute} music clip${nMute !== 1 ? 's' : ''}`
+              : 'Re-render';
+            return (
+              <button
+                type="button"
+                onClick={() => onRerender({ mute: muted, enhanceClips: selectedClips })}
+                disabled={busy || !has}
+                className="btn btn-primary text-xs whitespace-nowrap disabled:opacity-40"
+                title="Re-render a new version with your timeline edits (enhance selected clips / remove selected music)"
+              >
+                {label}
+              </button>
+            );
+          })()}
       </div>
 
       <div className="flex gap-2">
@@ -168,26 +207,44 @@ export default function EditTimeline({ timeline, onRerender, busy }: EditTimelin
               ))}
             </div>
 
-            {/* Video */}
+            {/* Video — click a clip to mark it for voice enhancement */}
             <div className="relative bg-gray-200/60 dark:bg-gray-800 rounded" style={{ height: 52 }}>
-              {timeline.clips.map((c) => (
-                <div
-                  key={c.order}
-                  className="absolute top-0 bottom-0 overflow-hidden border-r border-white/70 dark:border-black/40 bg-gray-300 dark:bg-gray-700"
-                  style={{ left: X(c.start), width: Wd(c.start, c.end) }}
-                  title={`#${c.order} ${c.filename}\nfinal ${fmtTime(c.start)}–${fmtTime(c.end)}\nsource ${c.source_start.toFixed(2)}s–${c.source_end.toFixed(2)}s`}
-                >
-                  <img
-                    src={getThumbnailUrl(c.video_id, 0)}
-                    alt=""
-                    className="absolute inset-0 w-full h-full object-cover opacity-90"
-                    onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')}
-                  />
-                  <span className="absolute bottom-0 left-0 right-0 px-1 text-[9px] leading-tight text-white bg-black/50 truncate">
-                    {c.filename}
-                  </span>
-                </div>
-              ))}
+              {timeline.clips.map((c) => {
+                const sel = isSelected(c.order);
+                const alreadyEnhanced = !!c.enhanced;
+                return (
+                  <div
+                    key={c.order}
+                    onClick={() => toggleSelectClip(c.order)}
+                    className={`absolute top-0 bottom-0 overflow-hidden bg-gray-300 dark:bg-gray-700 ${
+                      editable ? 'cursor-pointer' : ''
+                    } ${
+                      sel
+                        ? 'ring-2 ring-inset ring-purple-500 z-10'
+                        : 'border-r border-white/70 dark:border-black/40'
+                    }`}
+                    style={{ left: X(c.start), width: Wd(c.start, c.end) }}
+                    title={`#${c.order} ${c.filename}\nfinal ${fmtTime(c.start)}–${fmtTime(c.end)}\nsource ${c.source_start.toFixed(2)}s–${c.source_end.toFixed(2)}s${
+                      alreadyEnhanced ? '\nvoice enhanced' : ''
+                    }${editable ? '\n(click to mark for voice enhancement)' : ''}`}
+                  >
+                    <img
+                      src={getThumbnailUrl(c.video_id, 0)}
+                      alt=""
+                      className="absolute inset-0 w-full h-full object-cover opacity-90"
+                      onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')}
+                    />
+                    {(sel || alreadyEnhanced) && (
+                      <span className="absolute top-0 left-0 px-1 text-[9px] leading-tight text-white bg-purple-600/85 rounded-br pointer-events-none">
+                        {sel ? '✨' : '🎙'}
+                      </span>
+                    )}
+                    <span className="absolute bottom-0 left-0 right-0 px-1 text-[9px] leading-tight text-white bg-black/50 truncate">
+                      {c.filename}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
 
             {/* Voice */}
@@ -220,7 +277,7 @@ export default function EditTimeline({ timeline, onRerender, busy }: EditTimelin
                     }
                     className={`absolute bottom-0 ${
                       playing
-                        ? 'bg-emerald-500/80 cursor-pointer hover:bg-emerald-400'
+                        ? `bg-emerald-500/80 ${musicEditable ? 'cursor-pointer hover:bg-emerald-400' : ''}`
                         : removed
                         ? 'bg-red-400/50 cursor-pointer'
                         : 'bg-emerald-400/40'
@@ -243,9 +300,16 @@ export default function EditTimeline({ timeline, onRerender, busy }: EditTimelin
 
       <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-1 pl-14">
         Total {fmtTime(dur)} · {timeline.clips.length} clip{timeline.clips.length !== 1 ? 's' : ''}.
-        {onRerender
-          ? ' Zoom in and click the tall green music bars to remove those bursts, then re-render.'
-          : ' The music bar drops to the ducked level wherever the voice track shows speech.'}
+        {editable ? (
+          <>
+            {' '}Click a video clip to mark it for{' '}
+            <span className="text-purple-600 dark:text-purple-400">✨ voice enhancement</span>
+            {music.present ? ', or click the tall green music bars to remove those bursts' : ''}, then
+            re-render. 🎙 = already enhanced.
+          </>
+        ) : (
+          ' The music bar drops to the ducked level wherever the voice track shows speech.'
+        )}
       </p>
     </div>
   );

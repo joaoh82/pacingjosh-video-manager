@@ -415,16 +415,18 @@ export async function deleteEdit(editId: number): Promise<void> {
 
 /**
  * Re-render a run into a new version with timeline edits applied — `mute` is the
- * list of music regions (seconds, final timeline) to remove. Reuses the saved
+ * list of music regions (seconds, final timeline) to remove, `enhanceClips` is
+ * the list of clip `order`s to apply voice enhancement to. Reuses the saved
  * cut/transcription (no extra cost). Returns a job id to poll with getEditStatus.
  */
 export async function rerenderEdit(
   editId: number,
-  mute: { start: number; end: number }[]
+  mute: { start: number; end: number }[],
+  enhanceClips: number[] = []
 ): Promise<StartEditResponse> {
   return fetchApi<StartEditResponse>(`/api/edits/${editId}/rerender`, {
     method: 'POST',
-    body: JSON.stringify({ mute }),
+    body: JSON.stringify({ mute, enhance_clips: enhanceClips }),
   });
 }
 
