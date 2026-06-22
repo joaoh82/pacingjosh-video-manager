@@ -2,11 +2,15 @@
 
 import { useState, useEffect, useRef } from 'react';
 import ThumbnailEditor from './ThumbnailEditor';
-import { Production, EditJobStatus, ProductionEdit, YoutubeCopy } from '@/lib/types';
+import { Production, EditJobStatus, ProductionEdit, YoutubeCopy, Video } from '@/lib/types';
 import {
   startProductionEdit,
   getEditStatus,
   getProductionEdits,
+  getProductionVideos,
+  getStreamUrl,
+  getThumbnailUrl,
+  getEditVideoUrl,
   revealEditOutput,
   revealEditFile,
   deleteEdit,
@@ -28,7 +32,7 @@ function rootFromOutputPath(p?: string | null): string {
   return '';
 }
 import { format } from 'date-fns';
-import EditTimeline from './EditTimeline';
+import EditTimeline, { TimelineEdits } from './EditTimeline';
 
 interface VideoEditPipelineProps {
   isOpen: boolean;
@@ -54,6 +58,14 @@ function fmtDate(iso: string): string {
   }
 }
 
+/** Format seconds as `m:ss` for the take list. */
+function fmtClock(secs: number): string {
+  const s = Math.max(0, Math.round(secs));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m}:${r.toString().padStart(2, '0')}`;
+}
+
 export default function VideoEditPipeline({
   isOpen,
   production,
@@ -76,6 +88,13 @@ export default function VideoEditPipeline({
   const [musicVolume, setMusicVolume] = useState(0.3);
   const [musicDuckVolume, setMusicDuckVolume] = useState(0.08);
   const [musicMinGap, setMusicMinGap] = useState(1.5);
+
+  // Enhance voice (per-take noise removal) + intensity
+  const [takes, setTakes] = useState<Video[]>([]);
+  const [enhanceIds, setEnhanceIds] = useState<number[]>([]);
+  const [enhanceIntensity, setEnhanceIntensity] = useState(0.6);
+  // Which take (if any) is expanded for an inline video preview.
+  const [previewId, setPreviewId] = useState<number | null>(null);
 
   // Run state
   const [jobId, setJobId] = useState<string | null>(null);
@@ -108,6 +127,14 @@ export default function VideoEditPipeline({
     }
   };
 
+  const loadTakes = async (pid: number) => {
+    try {
+      setTakes(await getProductionVideos(pid));
+    } catch {
+      setTakes([]);
+    }
+  };
+
   useEffect(() => {
     if (isOpen && production) {
       document.body.style.overflow = 'hidden';
@@ -125,9 +152,14 @@ export default function VideoEditPipeline({
       setMusicVolume(0.3);
       setMusicDuckVolume(0.08);
       setMusicMinGap(1.5);
+      setTakes([]);
+      setEnhanceIds([]);
+      setEnhanceIntensity(0.6);
+      setPreviewId(null);
       setSelectedId(null);
       setView('new');
       loadHistory(production.id, true);
+      loadTakes(production.id);
     } else {
       document.body.style.overflow = 'unset';
     }
@@ -196,6 +228,8 @@ export default function VideoEditPipeline({
         music_volume: musicVolume,
         music_duck_volume: musicDuckVolume,
         music_min_gap: musicMinGap,
+        enhance_voice: enhanceIds,
+        enhance_voice_intensity: enhanceIntensity,
       });
       setJobId(res.job_id);
     } catch (e: any) {
@@ -223,12 +257,17 @@ export default function VideoEditPipeline({
     }
   };
 
-  const handleRerender = async (editId: number, mute: { start: number; end: number }[]) => {
+  const toggleEnhance = (id: number) =>
+    setEnhanceIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
+  const allEnhanced = takes.length > 0 && enhanceIds.length === takes.length;
+  const toggleAllEnhance = () => setEnhanceIds(allEnhanced ? [] : takes.map((t) => t.id));
+
+  const handleRerender = async (editId: number, edits: TimelineEdits) => {
     if (running) return;
     setError(null);
     setStatus(null);
     try {
-      const res = await rerenderEdit(editId, mute);
+      const res = await rerenderEdit(editId, edits.mute, edits.enhanceClips);
       setJobId(res.job_id);
     } catch (e: any) {
       setError(e.message || 'Failed to start re-render');
@@ -530,6 +569,122 @@ export default function VideoEditPipeline({
                     )}
                   </div>
 
+                  {/* Enhance voice — per-take noise removal */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        Enhance voice — remove background noise
+                      </label>
+                      {takes.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={toggleAllEnhance}
+                          disabled={running}
+                          className="text-xs text-primary-600 dark:text-primary-400 hover:underline"
+                        >
+                          {allEnhanced ? 'Clear all' : 'Select all'}
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+                      Cleans up the spoken audio on the takes you check — rolls off wind/handling
+                      rumble, knocks down steady background hiss, and removes mouth clicks/pops.
+                    </p>
+                    {takes.length === 0 ? (
+                      <p className="text-xs text-gray-400 dark:text-gray-500 italic">
+                        No takes found for this production.
+                      </p>
+                    ) : (
+                      <>
+                        <div className="max-h-72 overflow-y-auto rounded border border-gray-200 dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-700/60">
+                          {takes.map((t) => {
+                            const open = previewId === t.id;
+                            return (
+                              <div key={t.id} className="px-2 py-1.5">
+                                <div className="flex items-center gap-2">
+                                  <input
+                                    type="checkbox"
+                                    checked={enhanceIds.includes(t.id)}
+                                    onChange={() => toggleEnhance(t.id)}
+                                    disabled={running}
+                                    className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 flex-shrink-0"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => setPreviewId(open ? null : t.id)}
+                                    className="relative w-16 h-9 flex-shrink-0 rounded overflow-hidden bg-gray-200 dark:bg-gray-700 group"
+                                    title={open ? 'Hide preview' : 'Preview this take'}
+                                  >
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                    <img
+                                      src={getThumbnailUrl(t.id, 0)}
+                                      alt=""
+                                      className="absolute inset-0 w-full h-full object-cover"
+                                      onError={(e) => ((e.currentTarget as HTMLImageElement).style.visibility = 'hidden')}
+                                    />
+                                    <span className="absolute inset-0 flex items-center justify-center bg-black/30 text-white text-xs opacity-0 group-hover:opacity-100 transition-opacity">
+                                      {open ? '✕' : '▶'}
+                                    </span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleEnhance(t.id)}
+                                    disabled={running}
+                                    className="text-sm text-gray-700 dark:text-gray-300 truncate flex-1 text-left"
+                                  >
+                                    {t.filename}
+                                  </button>
+                                  {t.duration ? (
+                                    <span className="text-xs text-gray-400 dark:text-gray-500 flex-shrink-0">
+                                      {fmtClock(t.duration)}
+                                    </span>
+                                  ) : null}
+                                  <button
+                                    type="button"
+                                    onClick={() => setPreviewId(open ? null : t.id)}
+                                    className="text-xs text-primary-600 dark:text-primary-400 hover:underline flex-shrink-0"
+                                  >
+                                    {open ? 'Hide' : 'Preview'}
+                                  </button>
+                                </div>
+                                {open && (
+                                  <video
+                                    key={t.id}
+                                    src={getStreamUrl(t.id)}
+                                    controls
+                                    preload="metadata"
+                                    className="mt-2 w-full max-h-64 rounded bg-black"
+                                  />
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {enhanceIds.length > 0 && (
+                          <div className="mt-3 flex items-center gap-3">
+                            <span className="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap w-44">
+                              Intensity: {Math.round(enhanceIntensity * 100)}%
+                            </span>
+                            <input
+                              type="range"
+                              min={0}
+                              max={1}
+                              step={0.05}
+                              value={enhanceIntensity}
+                              onChange={(e) => setEnhanceIntensity(parseFloat(e.target.value))}
+                              disabled={running}
+                              className="flex-1"
+                            />
+                          </div>
+                        )}
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                          Higher intensity removes more noise but can start to sound processed.
+                          Applies only to the checked takes; needs no extra API keys.
+                        </p>
+                      </>
+                    )}
+                  </div>
+
                   {/* Music */}
                   <div>
                     <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
@@ -660,7 +815,7 @@ function EditDetail({
 }: {
   edit: ProductionEdit;
   onDeleted: () => void;
-  onRerender: (editId: number, mute: { start: number; end: number }[]) => void;
+  onRerender: (editId: number, edits: TimelineEdits) => void;
   busy: boolean;
 }) {
   const [scriptOpen, setScriptOpen] = useState(false);
@@ -772,10 +927,11 @@ function EditDetail({
       {edit.edl?.timeline && edit.edl.timeline.clips.length > 0 && (
         <EditTimeline
           timeline={edit.edl.timeline}
+          videoSrc={
+            edit.status === 'completed' && edit.output_path ? getEditVideoUrl(edit.id) : undefined
+          }
           onRerender={
-            edit.status === 'completed' && edit.edl.timeline.music?.present
-              ? (mute) => onRerender(edit.id, mute)
-              : undefined
+            edit.status === 'completed' ? (edits) => onRerender(edit.id, edits) : undefined
           }
           busy={busy}
         />
@@ -962,7 +1118,17 @@ function EditDetail({
               {clips.map((c) => (
                 <tr key={c.order} className="border-b dark:border-gray-700/50 align-top">
                   <td className="py-1.5 pr-2 text-gray-900 dark:text-white">{c.order}</td>
-                  <td className="py-1.5 pr-2 text-gray-900 dark:text-white break-all">{c.filename}</td>
+                  <td className="py-1.5 pr-2 text-gray-900 dark:text-white break-all">
+                    {c.filename}
+                    {c.enhanced && (
+                      <span
+                        className="ml-1.5 inline-block text-[10px] px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300 align-middle whitespace-nowrap"
+                        title="Voice enhanced (background noise removed)"
+                      >
+                        🎙 enhanced
+                      </span>
+                    )}
+                  </td>
                   <td className="py-1.5 pr-2 text-gray-600 dark:text-gray-300 whitespace-nowrap">
                     {c.start.toFixed(2)}s – {c.end.toFixed(2)}s
                   </td>

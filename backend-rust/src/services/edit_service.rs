@@ -179,6 +179,14 @@ pub struct EditOptions {
     pub tighten: bool,
     /// When tightening, remove silence/filler gaps longer than this many seconds.
     pub tighten_gap: f32,
+    /// "Enhance voice": the take (video) ids whose audio should be cleaned up
+    /// (wind/rumble, background hiss, mouth clicks) while cutting their clips.
+    /// Empty → no enhancement.
+    #[serde(default)]
+    pub enhance_voice_video_ids: Vec<i32>,
+    /// Voice-enhancement intensity, 0.0–1.0 (how aggressively to remove noise).
+    #[serde(default)]
+    pub enhance_voice_intensity: f32,
 }
 
 /// Start a background edit pipeline for a production. Returns the job id used to
@@ -345,14 +353,18 @@ fn snapshot_logs(edit_map: &EditJobMap, job_id: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Re-render an existing run with extra music-muted regions, WITHOUT
-/// re-transcribing or re-planning: it reuses the run's saved cut (the EDL clips),
-/// word transcripts, and options, and writes a fresh version (v<N+1>). `mute` is
-/// a list of (start, end) seconds on the final timeline where the music should
-/// be ducked (i.e. the bursts the user removed). Returns a job id to poll.
+/// Re-render an existing run with timeline edits applied, WITHOUT re-transcribing
+/// or re-planning: it reuses the run's saved cut (the EDL clips), word
+/// transcripts, and options, and writes a fresh version (v<N+1>). `mute` is a
+/// list of (start, end) seconds on the final timeline where the music should be
+/// ducked (the bursts the user removed). `enhance_clips` is a list of clip
+/// `order`s (1-based, as in the EDL) the user marked for voice enhancement;
+/// enhancement already on the saved cut (per-clip or take-level) is preserved so
+/// it stays sticky across re-renders. Returns a job id to poll.
 pub fn start_rerender(
     edit_id: i32,
     mute: Vec<(f32, f32)>,
+    enhance_clips: Vec<i32>,
     pool: DbPool,
     ai: AiSettings,
     edit_map: EditJobMap,
@@ -388,6 +400,10 @@ pub fn start_rerender(
         .ok_or("This run has no saved edit decision list to re-render.")?;
 
     let mut cut_list: Vec<ResolvedClipInternal> = Vec::new();
+    // Per-clip enhancement flags aligned to `cut_list`: a clip is enhanced if it
+    // was already enhanced on the saved cut (sticky), or its take was checked at
+    // run time, or the user just marked its `order` on the timeline.
+    let mut enhance_flags: Vec<bool> = Vec::new();
     for c in edl["clips"].as_array().cloned().unwrap_or_default() {
         let vid = match c["video_id"].as_i64() {
             Some(v) => v as i32,
@@ -402,6 +418,10 @@ pub fn start_rerender(
         if end <= start {
             continue;
         }
+        let order = c["order"].as_i64().unwrap_or(0) as i32;
+        let enhance = c["enhanced"].as_bool().unwrap_or(false)
+            || enhance_clips.contains(&order)
+            || opts.enhance_voice_video_ids.contains(&vid);
         cut_list.push(ResolvedClipInternal {
             video_id: vid,
             filename: video.filename.clone(),
@@ -410,6 +430,7 @@ pub fn start_rerender(
             end,
             reason: c["reason"].as_str().map(|s| s.to_string()),
         });
+        enhance_flags.push(enhance);
     }
     if cut_list.is_empty() {
         return Err("None of this run's source videos are available to re-render.".to_string());
@@ -433,6 +454,7 @@ pub fn start_rerender(
                 opts,
                 ai,
                 cut_list,
+                enhance_flags,
                 transcripts,
                 mute,
                 pool,
@@ -452,12 +474,13 @@ fn run_rerender(
     opts: EditOptions,
     ai: AiSettings,
     cut_list: Vec<ResolvedClipInternal>,
+    enhance_flags: Vec<bool>,
     transcripts: HashMap<i32, Vec<TranscriptWord>>,
     mute: Vec<(f32, f32)>,
     pool: DbPool,
     edit_map: EditJobMap,
 ) {
-    let result = rerender_inner(job_id, production_id, &production_title, &opts, &ai, &cut_list, &transcripts, &mute, &edit_map);
+    let result = rerender_inner(job_id, production_id, &production_title, &opts, &ai, &cut_list, &enhance_flags, &transcripts, &mute, &edit_map);
     let logs = snapshot_logs(&edit_map, job_id);
     let options_json = serde_json::to_string(&opts).ok();
     let transcripts_json = serde_json::to_string(&transcripts).ok();
@@ -514,6 +537,7 @@ fn rerender_inner(
     opts: &EditOptions,
     ai: &AiSettings,
     cut_list: &[ResolvedClipInternal],
+    enhance_flags: &[bool],
     transcripts: &HashMap<i32, Vec<TranscriptWord>>,
     mute: &[(f32, f32)],
     edit_map: &EditJobMap,
@@ -543,14 +567,26 @@ fn rerender_inner(
         log_msg(edit_map, job_id, &format!("Muting music in {} selected region(s).", mute.len()));
     }
 
-    let mut edl_value = build_edl_json(production_id, production_title, ai, cut_list, &output_path, opts.captions, music_name.as_deref());
-    edl_value["timeline"] = build_timeline(cut_list, &speech, &duck, opts, music_name.as_deref());
+    let mut edl_value = build_edl_json(
+        production_id,
+        production_title,
+        ai,
+        cut_list,
+        &output_path,
+        opts.captions,
+        music_name.as_deref(),
+        enhance_flags,
+        opts.enhance_voice_intensity,
+    );
+    edl_value["timeline"] = build_timeline(cut_list, &speech, &duck, opts, music_name.as_deref(), enhance_flags);
     let pretty = serde_json::to_string_pretty(&edl_value).unwrap_or_else(|_| "{}".to_string());
     std::fs::write(&edl_path, &pretty).map_err(|e| format!("Failed to write EDL JSON: {}", e))?;
 
     let work_dir = out_dir.join(format!(".work-{}", job_id));
     assemble_final(
-        edit_map, job_id, cut_list, transcripts, opts.captions, &[], &work_dir, &output_path,
+        edit_map, job_id, cut_list, transcripts, opts.captions,
+        enhance_flags, opts.enhance_voice_intensity,
+        &[], &work_dir, &output_path,
         music_path.as_deref(), opts.music_volume, opts.music_duck_volume, &duck,
     )?;
 
@@ -738,6 +774,14 @@ fn run_edit_inner(
     // `music_min_gap` stay part of speech so the music doesn't swell mid-sentence.
     let speech_timeline = timeline_speech_intervals(&cut_list, &transcripts, opts.music_min_gap);
 
+    // Per-clip "enhance voice" flags: a clip is enhanced when its take was
+    // checked in the form (tightened sub-clips inherit their take id, so this
+    // covers them too).
+    let enhance_flags: Vec<bool> = cut_list
+        .iter()
+        .map(|c| opts.enhance_voice_video_ids.contains(&c.video_id))
+        .collect();
+
     // Build the EDL JSON deliverable, plus a timeline (clips laid end-to-end +
     // speech intervals + music levels) for the editor-style preview.
     let mut edl_value = build_edl_json(
@@ -748,8 +792,10 @@ fn run_edit_inner(
         &output_path,
         opts.captions,
         music_name.as_deref(),
+        &enhance_flags,
+        opts.enhance_voice_intensity,
     );
-    edl_value["timeline"] = build_timeline(&cut_list, &speech_timeline, &speech_timeline, opts, music_name.as_deref());
+    edl_value["timeline"] = build_timeline(&cut_list, &speech_timeline, &speech_timeline, opts, music_name.as_deref(), &enhance_flags);
     let pretty = serde_json::to_string_pretty(&edl_value).unwrap_or_else(|_| "{}".to_string());
     std::fs::write(&edl_path, &pretty).map_err(|e| format!("Failed to write EDL JSON: {}", e))?;
     log_msg(edit_map, job_id, &format!("Wrote edit decision list to {}", edl_path.display()));
@@ -762,6 +808,8 @@ fn run_edit_inner(
         &cut_list,
         &transcripts,
         opts.captions,
+        &enhance_flags,
+        opts.enhance_voice_intensity,
         takes,
         &work_dir,
         &output_path,
@@ -790,6 +838,10 @@ fn assemble_final(
     cut_list: &[ResolvedClipInternal],
     transcripts: &HashMap<i32, Vec<TranscriptWord>>,
     captions: bool,
+    // Per-clip "enhance voice" flags, aligned to `cut_list`. A clip whose flag
+    // is true gets the noise-removal audio filter.
+    enhance_flags: &[bool],
+    enhance_intensity: f32,
     takes_for_spec: &[TakeMeta],
     work_dir: &std::path::Path,
     output_path: &std::path::Path,
@@ -819,12 +871,34 @@ fn assemble_final(
 
     std::fs::create_dir_all(work_dir).map_err(|e| format!("Failed to create work dir: {}", e))?;
 
-    let mut segments: Vec<PathBuf> = Vec::with_capacity(cut_list.len());
-    for (i, clip) in cut_list.iter().enumerate() {
+    let enhance_count = enhance_flags.iter().filter(|f| **f).count();
+    if enhance_count > 0 {
         log_msg(
             edit_map,
             job_id,
-            &format!("Cutting clip {}/{}: {} [{:.2}s–{:.2}s]", i + 1, cut_list.len(), clip.filename, clip.start, clip.end),
+            &format!(
+                "Enhancing voice (removing background noise) on {} clip(s) at {}% intensity.",
+                enhance_count,
+                (enhance_intensity.clamp(0.0, 1.0) * 100.0).round()
+            ),
+        );
+    }
+
+    let mut segments: Vec<PathBuf> = Vec::with_capacity(cut_list.len());
+    for (i, clip) in cut_list.iter().enumerate() {
+        let enhance = enhance_flags.get(i).copied().unwrap_or(false);
+        log_msg(
+            edit_map,
+            job_id,
+            &format!(
+                "Cutting clip {}/{}: {} [{:.2}s–{:.2}s]{}",
+                i + 1,
+                cut_list.len(),
+                clip.filename,
+                clip.start,
+                clip.end,
+                if enhance { " · voice enhanced" } else { "" }
+            ),
         );
 
         let sub_name = if captions {
@@ -842,6 +916,12 @@ fn assemble_final(
             None
         };
 
+        let audio_filter = if enhance {
+            Some(ffmpeg_service::voice_enhance_filter(enhance_intensity))
+        } else {
+            None
+        };
+
         let seg = work_dir.join(format!("seg_{:04}.mp4", i));
         ffmpeg_service::extract_clip_segment(
             std::path::Path::new(&clip.file_path),
@@ -852,6 +932,7 @@ fn assemble_final(
             target_fps,
             &seg,
             sub_name.as_deref(),
+            audio_filter.as_deref(),
         )?;
         segments.push(seg);
         update(edit_map, job_id, |p| p.processed = (i + 1) as i64);
@@ -1096,6 +1177,7 @@ fn resolve_plan(raw: &str, takes: &[TakeMeta]) -> Result<Vec<ResolvedClipInterna
 
 /// Build the EDL JSON deliverable, grouped by scene (as returned by the model)
 /// but using only the validated clips.
+#[allow(clippy::too_many_arguments)]
 fn build_edl_json(
     production_id: i32,
     production_title: &str,
@@ -1104,6 +1186,8 @@ fn build_edl_json(
     output_path: &std::path::Path,
     captions: bool,
     music: Option<&str>,
+    enhance_flags: &[bool],
+    enhance_intensity: f32,
 ) -> serde_json::Value {
     let clips: Vec<serde_json::Value> = resolved
         .iter()
@@ -1117,9 +1201,12 @@ fn build_edl_json(
                 "end": round2(c.end),
                 "duration": round2(c.end - c.start),
                 "reason": c.reason,
+                "enhanced": enhance_flags.get(i).copied().unwrap_or(false),
             })
         })
         .collect();
+
+    let any_enhanced = enhance_flags.iter().any(|f| *f);
 
     serde_json::json!({
         "production_id": production_id,
@@ -1130,6 +1217,10 @@ fn build_edl_json(
         "text_model": ai.text_model,
         "captions": captions,
         "music": music,
+        "voice_enhance": {
+            "enabled": any_enhanced,
+            "intensity": round2(enhance_intensity.clamp(0.0, 1.0)),
+        },
         "clips": clips,
         "output": output_path.file_name().map(|f| f.to_string_lossy().to_string()),
     })
@@ -1144,6 +1235,7 @@ fn build_timeline(
     duck: &[(f32, f32)],
     opts: &EditOptions,
     music_name: Option<&str>,
+    enhance_flags: &[bool],
 ) -> serde_json::Value {
     let mut clips = Vec::new();
     let mut cursor = 0.0f32;
@@ -1159,6 +1251,7 @@ fn build_timeline(
             "end": round2(tend),
             "source_start": round2(c.start),
             "source_end": round2(c.end),
+            "enhanced": enhance_flags.get(i).copied().unwrap_or(false),
         }));
         cursor = tend;
     }

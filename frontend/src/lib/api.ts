@@ -164,6 +164,17 @@ export async function getVideos(
   return fetchApi<VideoListResponse>(`/api/videos${query ? `?${query}` : ''}`);
 }
 
+/**
+ * Fetch the takes (videos) linked to a production, oldest first. Used by the
+ * Edit pipeline to offer per-take options (e.g. "Enhance voice").
+ */
+export async function getProductionVideos(productionId: number): Promise<Video[]> {
+  const res = await fetchApi<VideoListResponse>(
+    `/api/videos?production=${productionId}&limit=500&sort=date_asc`
+  );
+  return res.videos;
+}
+
 export async function updateVideo(id: number, data: VideoUpdate): Promise<Video> {
   return fetchApi<Video>(`/api/videos/${id}`, {
     method: 'PUT',
@@ -404,16 +415,18 @@ export async function deleteEdit(editId: number): Promise<void> {
 
 /**
  * Re-render a run into a new version with timeline edits applied — `mute` is the
- * list of music regions (seconds, final timeline) to remove. Reuses the saved
+ * list of music regions (seconds, final timeline) to remove, `enhanceClips` is
+ * the list of clip `order`s to apply voice enhancement to. Reuses the saved
  * cut/transcription (no extra cost). Returns a job id to poll with getEditStatus.
  */
 export async function rerenderEdit(
   editId: number,
-  mute: { start: number; end: number }[]
+  mute: { start: number; end: number }[],
+  enhanceClips: number[] = []
 ): Promise<StartEditResponse> {
   return fetchApi<StartEditResponse>(`/api/edits/${editId}/rerender`, {
     method: 'POST',
-    body: JSON.stringify({ mute }),
+    body: JSON.stringify({ mute, enhance_clips: enhanceClips }),
   });
 }
 
@@ -430,6 +443,11 @@ export async function generateEditCopy(
     method: 'POST',
     body: JSON.stringify({ regenerate }),
   });
+}
+
+/** Streaming URL for a finished run's final video (range-enabled, seekable). */
+export function getEditVideoUrl(editId: number): string {
+  return apiUrl(`/api/edits/${editId}/video`);
 }
 
 // --- Thumbnail builder ---

@@ -151,6 +151,8 @@ export interface EditClip {
   end: number;
   duration: number;
   reason?: string | null;
+  /** Whether voice enhancement (noise removal) was applied to this clip. */
+  enhanced?: boolean;
 }
 
 /** One clip placed on the assembled timeline. */
@@ -164,6 +166,8 @@ export interface TimelineClip {
   /** Range taken from the source take (seconds). */
   source_start: number;
   source_end: number;
+  /** Whether voice enhancement (noise removal) was applied to this clip. */
+  enhanced?: boolean;
 }
 
 /** A speech interval on the final timeline (where the music ducks). */
@@ -271,4 +275,8 @@ export interface StartEditPayload {
   tighten?: boolean;
   /** When tightening, cut silence/filler gaps longer than this many seconds. */
   tighten_gap?: number;
+  /** Take (video) ids to clean up with "Enhance voice" (noise removal). */
+  enhance_voice?: number[];
+  /** Voice-enhancement intensity, 0.0–1.0 (how aggressively to remove noise). */
+  enhance_voice_intensity?: number;
 }

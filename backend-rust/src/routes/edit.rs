@@ -1,4 +1,5 @@
-use actix_web::{delete, get, post, web, HttpResponse};
+use actix_files::NamedFile;
+use actix_web::{delete, get, post, web, HttpRequest, HttpResponse};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Deserialize;
 use std::path::Path;
@@ -15,6 +16,7 @@ fn default_music_volume() -> f32 { 0.3 }
 fn default_music_duck_volume() -> f32 { 0.08 }
 fn default_music_min_gap() -> f32 { 1.5 }
 fn default_tighten_gap() -> f32 { 1.5 }
+fn default_enhance_intensity() -> f32 { 0.6 }
 
 #[derive(Deserialize)]
 pub struct StartEditRequest {
@@ -51,6 +53,13 @@ pub struct StartEditRequest {
     /// When tightening, remove silence/filler gaps longer than this many seconds.
     #[serde(default = "default_tighten_gap")]
     pub tighten_gap: f32,
+    /// "Enhance voice": take (video) ids whose audio should be cleaned up
+    /// (wind/rumble, background hiss, mouth clicks). Empty → no enhancement.
+    #[serde(default)]
+    pub enhance_voice: Vec<i32>,
+    /// Voice-enhancement intensity, 0.0–1.0 (how aggressively to remove noise).
+    #[serde(default = "default_enhance_intensity")]
+    pub enhance_voice_intensity: f32,
 }
 
 /// Kick off the edit pipeline for a production. Returns a job id to poll.
@@ -77,6 +86,8 @@ async fn start_edit(
         music_min_gap: body.music_min_gap,
         tighten: body.tighten,
         tighten_gap: body.tighten_gap,
+        enhance_voice_video_ids: body.enhance_voice.clone(),
+        enhance_voice_intensity: body.enhance_voice_intensity,
     };
 
     match edit_service::start_edit(
@@ -163,6 +174,10 @@ pub struct RerenderRequest {
     /// "bursts" the user removed on the timeline.
     #[serde(default)]
     pub mute: Vec<MuteRegion>,
+    /// Clip `order`s (1-based, as in the EDL) the user marked for voice
+    /// enhancement on the timeline.
+    #[serde(default)]
+    pub enhance_clips: Vec<i32>,
 }
 
 #[derive(Deserialize)]
@@ -187,6 +202,7 @@ async fn rerender_edit(
     match edit_service::start_rerender(
         edit_id,
         mute,
+        body.enhance_clips.clone(),
         pool.get_ref().clone(),
         config.get_ai_settings(),
         edit_map.get_ref().clone(),
@@ -276,6 +292,28 @@ fn edit_output_path(pool: &DbPool, edit_id: i32) -> Option<String> {
     edit_service::get_edit_by_id(&mut conn, edit_id)
         .and_then(|e| e.output_path)
         .filter(|p| Path::new(p).exists())
+}
+
+/// Stream a run's final video for in-app playback. `NamedFile` handles HTTP
+/// range requests, so the player can seek without downloading the whole file.
+#[get("/edits/{edit_id}/video")]
+async fn edit_video(
+    pool: web::Data<DbPool>,
+    path: web::Path<i32>,
+    req: HttpRequest,
+) -> HttpResponse {
+    let edit_id = path.into_inner();
+    let out = match edit_output_path(pool.get_ref(), edit_id) {
+        Some(p) => p,
+        None => return HttpResponse::NotFound().json(serde_json::json!({ "detail": "Final video not found" })),
+    };
+    match NamedFile::open_async(&out).await {
+        Ok(file) => file
+            .use_last_modified(true)
+            .prefer_utf8(true)
+            .into_response(&req),
+        Err(e) => HttpResponse::NotFound().json(serde_json::json!({ "detail": format!("Could not open video: {}", e) })),
+    }
 }
 
 /// Grab a still frame (1280x720 JPEG) from a run's final video at `t` seconds.
@@ -505,6 +543,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         .service(reveal_edit_by_id)
         .service(rerender_edit)
         .service(generate_copy)
+        .service(edit_video)
         .service(edit_frame)
         .service(restyle_frame)
         .service(save_thumbnail)

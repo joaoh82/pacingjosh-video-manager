@@ -39,22 +39,43 @@ function regionsFrom(duck: TimelineSpeech[], duration: number) {
   return regions;
 }
 
+/** Pending timeline edits collected for a re-render. */
+export interface TimelineEdits {
+  /** Music regions (seconds) to remove. */
+  mute: { start: number; end: number }[];
+  /** Clip `order`s to apply voice enhancement to. */
+  enhanceClips: number[];
+}
+
 interface EditTimelineProps {
   timeline: Timeline;
-  /** Re-render the run with these music regions muted (null disables editing). */
-  onRerender?: (mute: { start: number; end: number }[]) => void;
+  /** Re-render the run with these timeline edits (undefined disables editing). */
+  onRerender?: (edits: TimelineEdits) => void;
+  /** Streaming URL of the rendered video — enables the synced preview player. */
+  videoSrc?: string;
   busy?: boolean;
 }
 
-export default function EditTimeline({ timeline, onRerender, busy }: EditTimelineProps) {
+export default function EditTimeline({ timeline, onRerender, videoSrc, busy }: EditTimelineProps) {
   const dur = timeline.duration > 0 ? timeline.duration : 1;
   const wrapRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const [containerW, setContainerW] = useState(0);
   const [zoom, setZoom] = useState(1);
   const [muted, setMuted] = useState<{ start: number; end: number }[]>([]);
+  // Clip `order`s the user selected to enhance on the next re-render.
+  const [selectedClips, setSelectedClips] = useState<number[]>([]);
+  // Playback position (seconds) of the preview player, mirrored by the playhead.
+  const [currentTime, setCurrentTime] = useState(0);
+  const [playing, setPlaying] = useState(false);
 
-  // Reset selection when the underlying run changes.
-  useEffect(() => setMuted([]), [timeline]);
+  // Reset selections + playhead when the underlying run changes.
+  useEffect(() => {
+    setMuted([]);
+    setSelectedClips([]);
+    setCurrentTime(0);
+    setPlaying(false);
+  }, [timeline]);
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -79,16 +100,114 @@ export default function EditTimeline({ timeline, onRerender, busy }: EditTimelin
   const duckIntervals = timeline.duck && timeline.duck.length ? timeline.duck : timeline.speech;
   const regions = regionsFrom(duckIntervals, dur);
 
+  const editable = !!onRerender && !busy;
+  const musicEditable = editable && music.present;
+
   const isMuted = (r: { start: number; end: number }) =>
     muted.some((m) => Math.abs(m.start - r.start) < 0.01 && Math.abs(m.end - r.end) < 0.01);
   const toggleMute = (r: { start: number; end: number }) => {
-    if (!onRerender || busy) return;
+    if (!musicEditable) return;
     setMuted((prev) =>
       isMuted(r)
         ? prev.filter((m) => !(Math.abs(m.start - r.start) < 0.01 && Math.abs(m.end - r.end) < 0.01))
         : [...prev, { start: r.start, end: r.end }]
     );
   };
+
+  const isSelected = (order: number) => selectedClips.includes(order);
+  const toggleSelectClip = (order: number) => {
+    if (!editable) return;
+    setSelectedClips((prev) =>
+      prev.includes(order) ? prev.filter((o) => o !== order) : [...prev, order]
+    );
+  };
+
+  // Mirror the preview player's position onto the timeline playhead.
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    let raf = 0;
+    const sync = () => {
+      const t = v.currentTime;
+      // Skip sub-30ms deltas to halve re-renders while playing.
+      setCurrentTime((prev) => (Math.abs(prev - t) > 0.03 ? t : prev));
+    };
+    const loop = () => {
+      sync();
+      raf = requestAnimationFrame(loop);
+    };
+    const onPlay = () => {
+      setPlaying(true);
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(loop);
+    };
+    const onStop = () => {
+      setPlaying(false);
+      cancelAnimationFrame(raf);
+      sync();
+    };
+    v.addEventListener('play', onPlay);
+    v.addEventListener('playing', onPlay);
+    v.addEventListener('pause', onStop);
+    v.addEventListener('ended', onStop);
+    v.addEventListener('seeked', sync);
+    v.addEventListener('timeupdate', sync);
+    return () => {
+      cancelAnimationFrame(raf);
+      v.removeEventListener('play', onPlay);
+      v.removeEventListener('playing', onPlay);
+      v.removeEventListener('pause', onStop);
+      v.removeEventListener('ended', onStop);
+      v.removeEventListener('seeked', sync);
+      v.removeEventListener('timeupdate', sync);
+    };
+  }, [videoSrc]);
+
+  // Seek the player (and playhead) to `t` seconds.
+  const seekTo = (t: number) => {
+    const clamped = Math.max(0, Math.min(dur, t));
+    setCurrentTime(clamped);
+    const v = videoRef.current;
+    if (v) v.currentTime = clamped;
+  };
+
+  // Scrub by clicking or dragging on the ruler.
+  const rulerRef = useRef<HTMLDivElement>(null);
+  const scrubbingRef = useRef(false);
+  const seekFromClientX = (clientX: number) => {
+    const el = rulerRef.current;
+    if (!el) return;
+    const x = clientX - el.getBoundingClientRect().left;
+    seekTo(x / pxPerSec);
+  };
+  useEffect(() => {
+    if (!videoSrc) return;
+    const move = (e: MouseEvent) => {
+      if (scrubbingRef.current) seekFromClientX(e.clientX);
+    };
+    const up = () => {
+      scrubbingRef.current = false;
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+    return () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [videoSrc, pxPerSec]);
+
+  // Keep the playhead in view while playing on a zoomed-in timeline.
+  useEffect(() => {
+    if (!playing) return;
+    const el = wrapRef.current;
+    if (!el) return;
+    const x = currentTime * pxPerSec;
+    if (x < el.scrollLeft + 24 || x > el.scrollLeft + el.clientWidth - 24) {
+      el.scrollLeft = Math.max(0, x - el.clientWidth / 2);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentTime, playing]);
 
   const ticks = Array.from({ length: 9 }, (_, i) => (dur * i) / 8);
   const Label = ({ h, children }: { h: number; children: ReactNode }) => (
@@ -102,6 +221,18 @@ export default function EditTimeline({ timeline, onRerender, busy }: EditTimelin
 
   return (
     <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-2 bg-gray-50 dark:bg-gray-900/40">
+      {/* Preview player — its position drives the timeline playhead */}
+      {videoSrc && (
+        <video
+          key={videoSrc}
+          ref={videoRef}
+          src={videoSrc}
+          controls
+          preload="metadata"
+          className="w-full max-h-[360px] bg-black rounded mb-2"
+        />
+      )}
+
       {/* Toolbar */}
       <div className="flex items-center gap-2 mb-2">
         <span className="text-[10px] text-gray-500 dark:text-gray-400">Zoom</span>
@@ -129,24 +260,44 @@ export default function EditTimeline({ timeline, onRerender, busy }: EditTimelin
           +
         </button>
         <span className="text-[10px] text-gray-400 dark:text-gray-500">{zoom.toFixed(1)}×</span>
-        <div className="flex-1" />
-        {onRerender && (
-          <button
-            type="button"
-            onClick={() => onRerender(muted)}
-            disabled={busy || muted.length === 0}
-            className="btn btn-primary text-xs whitespace-nowrap disabled:opacity-40"
-            title="Re-render a new version with the selected music removed"
-          >
-            {busy ? 'Re-rendering…' : `Re-render without ${muted.length} clip${muted.length !== 1 ? 's' : ''}`}
-          </button>
+        {videoSrc && (
+          <span className="text-[10px] tabular-nums text-gray-500 dark:text-gray-400 ml-2">
+            {fmtTime(currentTime)} / {fmtTime(dur)}
+          </span>
         )}
+        <div className="flex-1" />
+        {onRerender &&
+          (() => {
+            const nEnh = selectedClips.length;
+            const nMute = muted.length;
+            const has = nEnh + nMute > 0;
+            const label = busy
+              ? 'Re-rendering…'
+              : nEnh && nMute
+              ? `Re-render · ${nEnh} enhanced, ${nMute} music`
+              : nEnh
+              ? `✨ Enhance voice — re-render (${nEnh})`
+              : nMute
+              ? `Re-render without ${nMute} music clip${nMute !== 1 ? 's' : ''}`
+              : 'Re-render';
+            return (
+              <button
+                type="button"
+                onClick={() => onRerender({ mute: muted, enhanceClips: selectedClips })}
+                disabled={busy || !has}
+                className="btn btn-primary text-xs whitespace-nowrap disabled:opacity-40"
+                title="Re-render a new version with your timeline edits (enhance selected clips / remove selected music)"
+              >
+                {label}
+              </button>
+            );
+          })()}
       </div>
 
       <div className="flex gap-2">
         {/* Fixed label gutter */}
         <div className="flex flex-col gap-1 flex-none w-12">
-          <div style={{ height: 14 }} />
+          <div style={{ height: 16 }} />
           <Label h={52}>Video</Label>
           <Label h={16}>Voice</Label>
           <Label h={44}>Music</Label>
@@ -154,13 +305,36 @@ export default function EditTimeline({ timeline, onRerender, busy }: EditTimelin
 
         {/* Scrollable tracks */}
         <div ref={wrapRef} className="overflow-x-auto flex-1">
-          <div className="flex flex-col gap-1" style={{ width: innerW }}>
-            {/* Ruler */}
-            <div className="relative" style={{ height: 14 }}>
+          <div className="relative flex flex-col gap-1" style={{ width: innerW }}>
+            {/* Playhead (mirrors the preview player; click/drag the ruler to seek) */}
+            {videoSrc && (
+              <div
+                className="absolute top-0 bottom-0 z-20 pointer-events-none"
+                style={{ left: X(currentTime) }}
+              >
+                <div className="absolute inset-y-0 w-px bg-red-500" />
+                <div className="absolute -top-0.5 -left-[4px] w-[9px] h-[9px] rounded-sm bg-red-500" />
+              </div>
+            )}
+
+            {/* Ruler — click or drag to scrub the preview */}
+            <div
+              ref={rulerRef}
+              onMouseDown={
+                videoSrc
+                  ? (e) => {
+                      scrubbingRef.current = true;
+                      seekFromClientX(e.clientX);
+                    }
+                  : undefined
+              }
+              className={`relative ${videoSrc ? 'cursor-pointer' : ''}`}
+              style={{ height: 16 }}
+            >
               {ticks.map((t, i) => (
                 <span
                   key={i}
-                  className="absolute top-0 text-[9px] text-gray-400 dark:text-gray-500 -translate-x-1/2 whitespace-nowrap"
+                  className="absolute top-0 text-[9px] text-gray-400 dark:text-gray-500 -translate-x-1/2 whitespace-nowrap pointer-events-none"
                   style={{ left: X(t) }}
                 >
                   {fmtTime(t)}
@@ -168,26 +342,44 @@ export default function EditTimeline({ timeline, onRerender, busy }: EditTimelin
               ))}
             </div>
 
-            {/* Video */}
+            {/* Video — click a clip to mark it for voice enhancement */}
             <div className="relative bg-gray-200/60 dark:bg-gray-800 rounded" style={{ height: 52 }}>
-              {timeline.clips.map((c) => (
-                <div
-                  key={c.order}
-                  className="absolute top-0 bottom-0 overflow-hidden border-r border-white/70 dark:border-black/40 bg-gray-300 dark:bg-gray-700"
-                  style={{ left: X(c.start), width: Wd(c.start, c.end) }}
-                  title={`#${c.order} ${c.filename}\nfinal ${fmtTime(c.start)}–${fmtTime(c.end)}\nsource ${c.source_start.toFixed(2)}s–${c.source_end.toFixed(2)}s`}
-                >
-                  <img
-                    src={getThumbnailUrl(c.video_id, 0)}
-                    alt=""
-                    className="absolute inset-0 w-full h-full object-cover opacity-90"
-                    onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')}
-                  />
-                  <span className="absolute bottom-0 left-0 right-0 px-1 text-[9px] leading-tight text-white bg-black/50 truncate">
-                    {c.filename}
-                  </span>
-                </div>
-              ))}
+              {timeline.clips.map((c) => {
+                const sel = isSelected(c.order);
+                const alreadyEnhanced = !!c.enhanced;
+                return (
+                  <div
+                    key={c.order}
+                    onClick={() => toggleSelectClip(c.order)}
+                    className={`absolute top-0 bottom-0 overflow-hidden bg-gray-300 dark:bg-gray-700 ${
+                      editable ? 'cursor-pointer' : ''
+                    } ${
+                      sel
+                        ? 'ring-2 ring-inset ring-purple-500 z-10'
+                        : 'border-r border-white/70 dark:border-black/40'
+                    }`}
+                    style={{ left: X(c.start), width: Wd(c.start, c.end) }}
+                    title={`#${c.order} ${c.filename}\nfinal ${fmtTime(c.start)}–${fmtTime(c.end)}\nsource ${c.source_start.toFixed(2)}s–${c.source_end.toFixed(2)}s${
+                      alreadyEnhanced ? '\nvoice enhanced' : ''
+                    }${editable ? '\n(click to mark for voice enhancement)' : ''}`}
+                  >
+                    <img
+                      src={getThumbnailUrl(c.video_id, 0)}
+                      alt=""
+                      className="absolute inset-0 w-full h-full object-cover opacity-90"
+                      onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = 'none')}
+                    />
+                    {(sel || alreadyEnhanced) && (
+                      <span className="absolute top-0 left-0 px-1 text-[9px] leading-tight text-white bg-purple-600/85 rounded-br pointer-events-none">
+                        {sel ? '✨' : '🎙'}
+                      </span>
+                    )}
+                    <span className="absolute bottom-0 left-0 right-0 px-1 text-[9px] leading-tight text-white bg-black/50 truncate">
+                      {c.filename}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
 
             {/* Voice */}
@@ -220,7 +412,7 @@ export default function EditTimeline({ timeline, onRerender, busy }: EditTimelin
                     }
                     className={`absolute bottom-0 ${
                       playing
-                        ? 'bg-emerald-500/80 cursor-pointer hover:bg-emerald-400'
+                        ? `bg-emerald-500/80 ${musicEditable ? 'cursor-pointer hover:bg-emerald-400' : ''}`
                         : removed
                         ? 'bg-red-400/50 cursor-pointer'
                         : 'bg-emerald-400/40'
@@ -243,9 +435,17 @@ export default function EditTimeline({ timeline, onRerender, busy }: EditTimelin
 
       <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-1 pl-14">
         Total {fmtTime(dur)} · {timeline.clips.length} clip{timeline.clips.length !== 1 ? 's' : ''}.
-        {onRerender
-          ? ' Zoom in and click the tall green music bars to remove those bursts, then re-render.'
-          : ' The music bar drops to the ducked level wherever the voice track shows speech.'}
+        {videoSrc ? ' Play the preview above or click/drag the ruler to scrub — the red playhead follows along.' : ''}
+        {editable ? (
+          <>
+            {' '}Click a video clip to mark it for{' '}
+            <span className="text-purple-600 dark:text-purple-400">✨ voice enhancement</span>
+            {music.present ? ', or click the tall green music bars to remove those bursts' : ''}, then
+            re-render. 🎙 = already enhanced.
+          </>
+        ) : (
+          ' The music bar drops to the ducked level wherever the voice track shows speech.'
+        )}
       </p>
     </div>
   );
