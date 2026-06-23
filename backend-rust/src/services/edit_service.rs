@@ -189,6 +189,48 @@ pub struct EditOptions {
     pub enhance_voice_intensity: f32,
 }
 
+/// A user edit to one clip of a saved cut, applied on re-render. Identified by
+/// the clip `order` in the saved EDL. `source_start`/`source_end` (when set)
+/// re-trim the clip to a sub-range of its take — e.g. shortening a long-running
+/// take; `remove` drops it from the cut entirely.
+#[derive(Clone, Debug, Default)]
+pub struct ClipEdit {
+    pub order: i32,
+    /// Drop this clip from the re-rendered cut.
+    pub remove: bool,
+    /// Override the source range start (seconds into the take). None keeps it.
+    pub source_start: Option<f32>,
+    /// Override the source range end (seconds into the take). None keeps it.
+    pub source_end: Option<f32>,
+    /// Apply voice enhancement to this clip.
+    pub enhance: bool,
+}
+
+/// Apply a clip edit to a saved EDL clip's source range, clamped to the take's
+/// real `duration` (0 = unknown, no upper clamp). Returns `None` when the clip
+/// is removed or the resulting range is empty/invalid. Pure for testability.
+fn apply_clip_edit(
+    saved_start: f32,
+    saved_end: f32,
+    duration: f32,
+    edit: Option<&ClipEdit>,
+) -> Option<(f32, f32)> {
+    if edit.map(|e| e.remove).unwrap_or(false) {
+        return None;
+    }
+    let mut start = edit.and_then(|e| e.source_start).unwrap_or(saved_start).max(0.0);
+    let mut end = edit.and_then(|e| e.source_end).unwrap_or(saved_end);
+    if duration > 0.0 {
+        end = end.min(duration);
+        start = start.min(duration);
+    }
+    if end <= start {
+        None
+    } else {
+        Some((start, end))
+    }
+}
+
 /// Start a background edit pipeline for a production. Returns the job id used to
 /// poll progress. Fails fast if the production has no videos.
 pub fn start_edit(
@@ -357,13 +399,18 @@ fn snapshot_logs(edit_map: &EditJobMap, job_id: &str) -> Vec<String> {
 /// or re-planning: it reuses the run's saved cut (the EDL clips), word
 /// transcripts, and options, and writes a fresh version (v<N+1>). `mute` is a
 /// list of (start, end) seconds on the final timeline where the music should be
-/// ducked (the bursts the user removed). `enhance_clips` is a list of clip
+/// ducked (the bursts the user removed); `fade` is a list of regions where the
+/// music should ramp in/out. `clip_edits` re-trim or drop individual clips (a
+/// long take shortened, or a clip removed). `enhance_clips` is a list of clip
 /// `order`s (1-based, as in the EDL) the user marked for voice enhancement;
 /// enhancement already on the saved cut (per-clip or take-level) is preserved so
 /// it stays sticky across re-renders. Returns a job id to poll.
+#[allow(clippy::too_many_arguments)]
 pub fn start_rerender(
     edit_id: i32,
     mute: Vec<(f32, f32)>,
+    fade: Vec<(f32, f32)>,
+    clip_edits: Vec<ClipEdit>,
     enhance_clips: Vec<i32>,
     pool: DbPool,
     ai: AiSettings,
@@ -399,10 +446,14 @@ pub fn start_rerender(
         .and_then(|s| serde_json::from_str(s).ok())
         .ok_or("This run has no saved edit decision list to re-render.")?;
 
+    let edits_by_order: HashMap<i32, &ClipEdit> =
+        clip_edits.iter().map(|e| (e.order, e)).collect();
+
     let mut cut_list: Vec<ResolvedClipInternal> = Vec::new();
     // Per-clip enhancement flags aligned to `cut_list`: a clip is enhanced if it
     // was already enhanced on the saved cut (sticky), or its take was checked at
-    // run time, or the user just marked its `order` on the timeline.
+    // run time, the user marked its `order` on the timeline, or a clip edit
+    // enabled it.
     let mut enhance_flags: Vec<bool> = Vec::new();
     for c in edl["clips"].as_array().cloned().unwrap_or_default() {
         let vid = match c["video_id"].as_i64() {
@@ -413,13 +464,18 @@ pub fn start_rerender(
             Some(v) => v,
             None => continue,
         };
-        let start = c["start"].as_f64().unwrap_or(0.0) as f32;
-        let end = c["end"].as_f64().unwrap_or(0.0) as f32;
-        if end <= start {
-            continue;
-        }
         let order = c["order"].as_i64().unwrap_or(0) as i32;
+        let edit = edits_by_order.get(&order).copied();
+        let saved_start = c["start"].as_f64().unwrap_or(0.0) as f32;
+        let saved_end = c["end"].as_f64().unwrap_or(0.0) as f32;
+        // Apply any trim/remove edit, clamped to the take's real duration.
+        let (start, end) =
+            match apply_clip_edit(saved_start, saved_end, video.duration.unwrap_or(0.0), edit) {
+                Some(range) => range,
+                None => continue, // removed or empty after trimming
+            };
         let enhance = c["enhanced"].as_bool().unwrap_or(false)
+            || edit.map(|e| e.enhance).unwrap_or(false)
             || enhance_clips.contains(&order)
             || opts.enhance_voice_video_ids.contains(&vid);
         cut_list.push(ResolvedClipInternal {
@@ -433,7 +489,7 @@ pub fn start_rerender(
         enhance_flags.push(enhance);
     }
     if cut_list.is_empty() {
-        return Err("None of this run's source videos are available to re-render.".to_string());
+        return Err("No clips left to re-render — every clip was removed or unavailable.".to_string());
     }
 
     let job_id = Uuid::new_v4().to_string();
@@ -457,6 +513,7 @@ pub fn start_rerender(
                 enhance_flags,
                 transcripts,
                 mute,
+                fade,
                 pool,
                 edit_map,
             );
@@ -477,10 +534,11 @@ fn run_rerender(
     enhance_flags: Vec<bool>,
     transcripts: HashMap<i32, Vec<TranscriptWord>>,
     mute: Vec<(f32, f32)>,
+    fade: Vec<(f32, f32)>,
     pool: DbPool,
     edit_map: EditJobMap,
 ) {
-    let result = rerender_inner(job_id, production_id, &production_title, &opts, &ai, &cut_list, &enhance_flags, &transcripts, &mute, &edit_map);
+    let result = rerender_inner(job_id, production_id, &production_title, &opts, &ai, &cut_list, &enhance_flags, &transcripts, &mute, &fade, &edit_map);
     let logs = snapshot_logs(&edit_map, job_id);
     let options_json = serde_json::to_string(&opts).ok();
     let transcripts_json = serde_json::to_string(&transcripts).ok();
@@ -540,6 +598,7 @@ fn rerender_inner(
     enhance_flags: &[bool],
     transcripts: &HashMap<i32, Vec<TranscriptWord>>,
     mute: &[(f32, f32)],
+    fade: &[(f32, f32)],
     edit_map: &EditJobMap,
 ) -> Result<AssembledEdit, String> {
     set_stage(edit_map, job_id, "starting", "Re-rendering with your timeline edits…");
@@ -560,12 +619,14 @@ fn rerender_inner(
     let music_path = opts.music_path.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(PathBuf::from);
     let music_name = music_path.as_ref().and_then(|p| p.file_name()).map(|f| f.to_string_lossy().to_string());
 
-    // Music now ducks at speech ∪ the muted regions the user removed.
+    // Music now ducks at speech ∪ the muted regions the user removed, and ramps
+    // in/out across any fade regions.
     let speech = timeline_speech_intervals(cut_list, transcripts, opts.music_min_gap);
     let duck = merge_intervals(&speech, mute);
     if !mute.is_empty() {
         log_msg(edit_map, job_id, &format!("Muting music in {} selected region(s).", mute.len()));
     }
+    log_msg(edit_map, job_id, &format!("Re-rendering {} clip(s) from the saved cut.", cut_list.len()));
 
     let mut edl_value = build_edl_json(
         production_id,
@@ -578,7 +639,7 @@ fn rerender_inner(
         enhance_flags,
         opts.enhance_voice_intensity,
     );
-    edl_value["timeline"] = build_timeline(cut_list, &speech, &duck, opts, music_name.as_deref(), enhance_flags);
+    edl_value["timeline"] = build_timeline(cut_list, &speech, &duck, fade, opts, music_name.as_deref(), enhance_flags);
     let pretty = serde_json::to_string_pretty(&edl_value).unwrap_or_else(|_| "{}".to_string());
     std::fs::write(&edl_path, &pretty).map_err(|e| format!("Failed to write EDL JSON: {}", e))?;
 
@@ -587,7 +648,7 @@ fn rerender_inner(
         edit_map, job_id, cut_list, transcripts, opts.captions,
         enhance_flags, opts.enhance_voice_intensity,
         &[], &work_dir, &output_path,
-        music_path.as_deref(), opts.music_volume, opts.music_duck_volume, &duck,
+        music_path.as_deref(), opts.music_volume, opts.music_duck_volume, &duck, fade,
     )?;
 
     Ok(AssembledEdit {
@@ -795,7 +856,7 @@ fn run_edit_inner(
         &enhance_flags,
         opts.enhance_voice_intensity,
     );
-    edl_value["timeline"] = build_timeline(&cut_list, &speech_timeline, &speech_timeline, opts, music_name.as_deref(), &enhance_flags);
+    edl_value["timeline"] = build_timeline(&cut_list, &speech_timeline, &speech_timeline, &[], opts, music_name.as_deref(), &enhance_flags);
     let pretty = serde_json::to_string_pretty(&edl_value).unwrap_or_else(|_| "{}".to_string());
     std::fs::write(&edl_path, &pretty).map_err(|e| format!("Failed to write EDL JSON: {}", e))?;
     log_msg(edit_map, job_id, &format!("Wrote edit decision list to {}", edl_path.display()));
@@ -817,6 +878,7 @@ fn run_edit_inner(
         opts.music_volume,
         opts.music_duck_volume,
         &speech_timeline,
+        &[],
     )?;
 
     Ok(AssembledEdit {
@@ -849,6 +911,7 @@ fn assemble_final(
     music_volume: f32,
     music_duck_volume: f32,
     duck_intervals: &[(f32, f32)],
+    fade_intervals: &[(f32, f32)],
 ) -> Result<(), String> {
     let (target_w, target_h, target_fps) = resolve_target_spec(cut_list, takes_for_spec);
     set_stage(
@@ -953,7 +1016,14 @@ fn assemble_final(
                 (music_duck_volume * 100.0).round()
             ),
         );
-        match ffmpeg_service::add_background_music(&concat_tmp, music, music_volume, music_duck_volume, duck_intervals, output_path) {
+        if !fade_intervals.is_empty() {
+            log_msg(
+                edit_map,
+                job_id,
+                &format!("Fading the music in/out across {} region(s).", fade_intervals.len()),
+            );
+        }
+        match ffmpeg_service::add_background_music(&concat_tmp, music, music_volume, music_duck_volume, duck_intervals, fade_intervals, output_path) {
             Ok(()) => log_msg(edit_map, job_id, "Mixed in background music."),
             Err(e) => {
                 warn!("[edit {}] background music failed: {}", job_id, e);
@@ -1229,10 +1299,12 @@ fn build_edl_json(
 /// Build the editor-style timeline for the EDL: every clip laid end-to-end on a
 /// single timeline, the speech intervals (re-timed onto that timeline, used to
 /// visualize where the music ducks), the total duration, and the music levels.
+#[allow(clippy::too_many_arguments)]
 fn build_timeline(
     resolved: &[ResolvedClipInternal],
     speech: &[(f32, f32)],
     duck: &[(f32, f32)],
+    fade: &[(f32, f32)],
     opts: &EditOptions,
     music_name: Option<&str>,
     enhance_flags: &[bool],
@@ -1274,6 +1346,7 @@ fn build_timeline(
         "clips": clips,
         "speech": to_json(speech),
         "duck": to_json(duck),
+        "fades": to_json(fade),
         "music": {
             "present": music_present,
             "name": music_name,
@@ -1730,5 +1803,337 @@ pub fn get_all_edits(
             error!("Failed to load edit history for production {}: {}", production_id, e);
             Vec::new()
         }
+    }
+}
+
+// --- AI timeline assistant ---------------------------------------------------
+
+/// The spoken words inside a clip's source range, joined into one string.
+fn clip_text(words: &[TranscriptWord], start: f32, end: f32) -> String {
+    let mut out = String::new();
+    for w in words.iter().filter(|w| w.end > start && w.start < end) {
+        let t = w.text.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(t);
+    }
+    out
+}
+
+/// Complement of `speech` within `[0, total]`: the regions with no speech (where
+/// background music plays at full level). Used to show the model the music
+/// "bursts" it can fade/remove.
+fn non_speech_regions(speech: &[(f32, f32)], total: f32) -> Vec<(f32, f32)> {
+    let merged = merge_intervals(speech, &[]);
+    let mut out = Vec::new();
+    let mut cursor = 0.0f32;
+    for (s, e) in merged {
+        if s > cursor {
+            out.push((cursor, s));
+        }
+        cursor = cursor.max(e);
+    }
+    if cursor < total {
+        out.push((cursor, total));
+    }
+    out.into_iter().filter(|(s, e)| e - s > 0.05).collect()
+}
+
+/// Parse + validate the model's timeline-edit JSON against the real cut: keep
+/// only clip edits whose `order` exists, clamp any source range to the clip's
+/// listed source range, and keep music regions with a known action clamped to
+/// `[0, total]`. Pure (no I/O) for testability.
+fn parse_timeline_edit_plan(
+    raw: &str,
+    clips: &[serde_json::Value],
+    total: f32,
+) -> serde_json::Value {
+    let value: serde_json::Value =
+        serde_json::from_str(extract_json(raw)).unwrap_or(serde_json::Value::Null);
+
+    // order -> (source_start, source_end) of the saved clip, for clamping.
+    let mut ranges: HashMap<i64, (f32, f32)> = HashMap::new();
+    for c in clips {
+        if let Some(order) = c["order"].as_i64() {
+            let s = c["start"].as_f64().unwrap_or(0.0) as f32;
+            let e = c["end"].as_f64().unwrap_or(0.0) as f32;
+            ranges.insert(order, (s, e));
+        }
+    }
+
+    let mut out_clips = Vec::new();
+    for c in value["clips"].as_array().cloned().unwrap_or_default() {
+        let order = match c["order"].as_i64() {
+            Some(o) => o,
+            None => continue,
+        };
+        let (cs, ce) = match ranges.get(&order) {
+            Some(r) => *r,
+            None => continue, // unknown clip — drop
+        };
+        let remove = c["remove"].as_bool().unwrap_or(false);
+        let enhance = c["enhance"].as_bool().unwrap_or(false);
+
+        let mut obj = serde_json::Map::new();
+        obj.insert("order".into(), serde_json::json!(order));
+        if remove {
+            obj.insert("remove".into(), serde_json::json!(true));
+        }
+        if enhance {
+            obj.insert("enhance".into(), serde_json::json!(true));
+        }
+        if !remove {
+            // Clamp any provided source range to the clip's existing range.
+            let prov_s = read_f32(&c["source_start"]);
+            let prov_e = read_f32(&c["source_end"]);
+            let eff_s = prov_s.map(|v| v.clamp(cs, ce)).unwrap_or(cs);
+            let eff_e = prov_e.map(|v| v.clamp(cs, ce)).unwrap_or(ce);
+            if eff_e > eff_s {
+                if prov_s.is_some() {
+                    obj.insert("source_start".into(), serde_json::json!(round2(eff_s)));
+                }
+                if prov_e.is_some() {
+                    obj.insert("source_end".into(), serde_json::json!(round2(eff_e)));
+                }
+            }
+        }
+
+        // Skip no-op edits (just an order with nothing changed).
+        if obj.len() > 1 {
+            out_clips.push(serde_json::Value::Object(obj));
+        }
+    }
+
+    let cap = if total > 0.0 { total } else { f32::MAX };
+    let mut out_music = Vec::new();
+    for m in value["music"].as_array().cloned().unwrap_or_default() {
+        let action = m["action"].as_str().unwrap_or("");
+        if action != "remove" && action != "fade" {
+            continue;
+        }
+        let s = read_f32(&m["start"]).unwrap_or(0.0).max(0.0);
+        let e = read_f32(&m["end"]).unwrap_or(0.0).min(cap);
+        if e <= s {
+            continue;
+        }
+        out_music.push(serde_json::json!({
+            "start": round2(s),
+            "end": round2(e),
+            "action": action,
+        }));
+    }
+
+    serde_json::json!({
+        "clips": out_clips,
+        "music": out_music,
+        "explanation": value["explanation"].as_str().unwrap_or("").to_string(),
+    })
+}
+
+/// Build a structured "timeline edit plan" from a natural-language instruction.
+/// The LLM is shown the saved cut (each clip's take, source range, duration and
+/// spoken text) plus the music regions, and returns the clips to trim / remove /
+/// enhance and the music regions to remove / fade. The plan is validated against
+/// the real cut before returning (unknown clips dropped, ranges clamped). This
+/// only PROPOSES edits — the user reviews them and then re-renders; it does not
+/// re-transcribe or re-plan the whole edit.
+pub async fn plan_timeline_edits(
+    edit: &crate::models::ProductionEdit,
+    ai: &AiSettings,
+    instruction: &str,
+    selected_orders: &[i32],
+) -> Result<serde_json::Value, String> {
+    if instruction.trim().is_empty() {
+        return Err("Type what you'd like the AI to change.".to_string());
+    }
+
+    let edl: serde_json::Value = edit
+        .edl_json
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .ok_or("This run has no saved edit decision list to edit.")?;
+    let transcripts: HashMap<i32, Vec<TranscriptWord>> = edit
+        .transcripts_json
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_default();
+
+    let clips = edl["clips"].as_array().cloned().unwrap_or_default();
+    if clips.is_empty() {
+        return Err("This run has no clips to edit.".to_string());
+    }
+
+    // Describe each clip with its spoken text so the model can make sensible cuts.
+    let mut clip_block = String::new();
+    for c in &clips {
+        let order = c["order"].as_i64().unwrap_or(0);
+        let vid = c["video_id"].as_i64().unwrap_or(0) as i32;
+        let filename = c["filename"].as_str().unwrap_or("");
+        let start = c["start"].as_f64().unwrap_or(0.0) as f32;
+        let end = c["end"].as_f64().unwrap_or(0.0) as f32;
+        let enhanced = c["enhanced"].as_bool().unwrap_or(false);
+        let words = transcripts.get(&vid).map(|w| w.as_slice()).unwrap_or(&[]);
+        let text = clip_text(words, start, end);
+        let sel = if selected_orders.contains(&(order as i32)) { " [SELECTED]" } else { "" };
+        clip_block.push_str(&format!(
+            "CLIP order={}{} | take=\"{}\" video_id={} | source {:.2}s–{:.2}s ({:.2}s) | enhanced={}\n  text: {}\n",
+            order, sel, filename, vid, start, end, (end - start).max(0.0), enhanced,
+            if text.is_empty() { "(no transcript)".to_string() } else { truncate(&text, 600) }
+        ));
+    }
+
+    // Music regions + levels from the saved timeline.
+    let timeline = &edl["timeline"];
+    let total = timeline["duration"].as_f64().unwrap_or(0.0) as f32;
+    let music_present = timeline["music"]["present"].as_bool().unwrap_or(false);
+    let mut music_block = String::new();
+    if music_present {
+        let full = timeline["music"]["full_volume"].as_f64().unwrap_or(0.0);
+        let duck = timeline["music"]["duck_volume"].as_f64().unwrap_or(0.0);
+        music_block.push_str(&format!(
+            "MUSIC: present. Full level {}%, ducked level {}% while talking. Total timeline {:.2}s.\n",
+            (full * 100.0).round(),
+            (duck * 100.0).round(),
+            total
+        ));
+        let speech: Vec<(f32, f32)> = timeline["speech"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| Some((v["start"].as_f64()? as f32, v["end"].as_f64()? as f32)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        music_block.push_str("Music plays at full level in these non-speech regions (good fade/remove targets):\n");
+        for (s, e) in non_speech_regions(&speech, total) {
+            music_block.push_str(&format!("- {:.2}s–{:.2}s\n", s, e));
+        }
+    } else {
+        music_block.push_str("MUSIC: none on this run (music edits will have no effect).\n");
+    }
+
+    let selected_note = if selected_orders.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\nThe creator has SELECTED these clip orders to focus on: {:?}. Prefer editing those unless the instruction clearly refers to others.\n",
+            selected_orders
+        )
+    };
+
+    let prompt = format!(
+        "You are a precise video editor adjusting an ALREADY-ASSEMBLED cut. Apply ONLY the creator's instruction below; do not redo the whole edit.\n\n\
+Return STRICT JSON (no markdown, no commentary) with this shape:\n\
+{{\n  \"clips\": [ {{ \"order\": <int>, \"remove\": <bool, optional>, \"source_start\": <sec, optional>, \"source_end\": <sec, optional>, \"enhance\": <bool, optional> }} ],\n  \"music\": [ {{ \"start\": <sec>, \"end\": <sec>, \"action\": \"remove\"|\"fade\" }} ],\n  \"explanation\": \"<one or two sentences>\"\n}}\n\n\
+Rules:\n\
+- Only include clips/music regions you are CHANGING. Leave everything else out.\n\
+- source_start/source_end are ABSOLUTE seconds INTO THE TAKE and must stay within the clip's current source range. To shorten a long-running take, narrow the range (raise source_start and/or lower source_end). To DROP a clip set remove:true.\n\
+- Keep source_start < source_end.\n\
+- music \"remove\" silences/ducks the music in that region; \"fade\" ramps it in and out. Use the listed non-speech regions as a guide.\n\
+- enhance:true cleans up that clip's voice (background-noise removal).\n\
+{selected}\n\
+CURRENT CUT ({nclips} clips):\n{clips}\n{music}\n\
+CREATOR INSTRUCTION:\n\"\"\"\n{instruction}\n\"\"\"",
+        selected = selected_note,
+        nclips = clips.len(),
+        clips = clip_block,
+        music = music_block,
+        instruction = instruction.trim(),
+    );
+
+    let raw = ai_service::complete(&prompt, ai, 2048)
+        .await
+        .map_err(|e| format!("AI timeline edit failed: {}", e))?;
+
+    Ok(parse_timeline_edit_plan(&raw, &clips, total))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apply_clip_edit_keeps_saved_range_without_edit() {
+        assert_eq!(apply_clip_edit(1.0, 5.0, 10.0, None), Some((1.0, 5.0)));
+    }
+
+    #[test]
+    fn apply_clip_edit_remove_returns_none() {
+        let e = ClipEdit { order: 1, remove: true, ..Default::default() };
+        assert_eq!(apply_clip_edit(1.0, 5.0, 10.0, Some(&e)), None);
+    }
+
+    #[test]
+    fn apply_clip_edit_trims_and_clamps_to_duration() {
+        let e = ClipEdit {
+            order: 1,
+            source_start: Some(2.0),
+            source_end: Some(50.0),
+            ..Default::default()
+        };
+        // source_end clamped down to the take's real 8s duration.
+        assert_eq!(apply_clip_edit(1.0, 5.0, 8.0, Some(&e)), Some((2.0, 8.0)));
+    }
+
+    #[test]
+    fn apply_clip_edit_rejects_inverted_range() {
+        let e = ClipEdit {
+            order: 1,
+            source_start: Some(5.0),
+            source_end: Some(3.0),
+            ..Default::default()
+        };
+        assert_eq!(apply_clip_edit(1.0, 9.0, 10.0, Some(&e)), None);
+    }
+
+    #[test]
+    fn non_speech_regions_are_the_gaps() {
+        let r = non_speech_regions(&[(2.0, 4.0), (6.0, 7.0)], 10.0);
+        assert_eq!(r, vec![(0.0, 2.0), (4.0, 6.0), (7.0, 10.0)]);
+    }
+
+    #[test]
+    fn parse_plan_drops_unknown_orders_and_clamps_ranges() {
+        let clips = vec![serde_json::json!({
+            "order": 1, "video_id": 5, "start": 0.0, "end": 10.0
+        })];
+        let raw = r#"{
+            "clips": [
+                { "order": 1, "source_start": -2, "source_end": 8 },
+                { "order": 9, "remove": true }
+            ],
+            "music": [
+                { "start": 0, "end": 3, "action": "fade" },
+                { "start": 1, "end": 2, "action": "bogus" }
+            ],
+            "explanation": "ok"
+        }"#;
+        let plan = parse_timeline_edit_plan(raw, &clips, 12.0);
+        let pc = plan["clips"].as_array().unwrap();
+        assert_eq!(pc.len(), 1);
+        assert_eq!(pc[0]["order"], 1);
+        assert_eq!(pc[0]["source_start"], 0.0); // clamped up from -2
+        assert_eq!(pc[0]["source_end"], 8.0);
+        let pm = plan["music"].as_array().unwrap();
+        assert_eq!(pm.len(), 1);
+        assert_eq!(pm[0]["action"], "fade");
+    }
+
+    #[test]
+    fn parse_plan_handles_remove_and_enhance() {
+        let clips = vec![serde_json::json!({
+            "order": 2, "video_id": 7, "start": 1.0, "end": 9.0
+        })];
+        let raw = r#"{ "clips": [ { "order": 2, "remove": true, "enhance": true } ], "music": [] }"#;
+        let plan = parse_timeline_edit_plan(raw, &clips, 9.0);
+        let pc = plan["clips"].as_array().unwrap();
+        assert_eq!(pc.len(), 1);
+        assert_eq!(pc[0]["remove"], true);
+        assert_eq!(pc[0]["enhance"], true);
+        assert!(pc[0].get("source_start").is_none());
     }
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import ThumbnailEditor from './ThumbnailEditor';
 import { Production, EditJobStatus, ProductionEdit, YoutubeCopy, Video } from '@/lib/types';
 import {
@@ -104,6 +104,12 @@ export default function VideoEditPipeline({
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const running = status?.status === 'in_progress' || starting;
+
+  // video_id → duration (seconds), used to clamp clip trims on the timeline.
+  const takeDurations = useMemo(
+    () => Object.fromEntries(takes.map((t) => [t.id, t.duration ?? 0])),
+    [takes]
+  );
 
   const loadHistory = async (pid: number, selectLatest: boolean) => {
     try {
@@ -267,7 +273,7 @@ export default function VideoEditPipeline({
     setError(null);
     setStatus(null);
     try {
-      const res = await rerenderEdit(editId, edits.mute, edits.enhanceClips);
+      const res = await rerenderEdit(editId, edits);
       setJobId(res.job_id);
     } catch (e: any) {
       setError(e.message || 'Failed to start re-render');
@@ -796,6 +802,7 @@ export default function VideoEditPipeline({
                     onDeleted={() => loadHistory(production.id, true)}
                     onRerender={handleRerender}
                     busy={running}
+                    takeDurations={takeDurations}
                   />
                 )
               )}
@@ -812,11 +819,13 @@ function EditDetail({
   onDeleted,
   onRerender,
   busy,
+  takeDurations,
 }: {
   edit: ProductionEdit;
   onDeleted: () => void;
   onRerender: (editId: number, edits: TimelineEdits) => void;
   busy: boolean;
+  takeDurations: Record<number, number>;
 }) {
   const [scriptOpen, setScriptOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -934,6 +943,8 @@ function EditDetail({
             edit.status === 'completed' ? (edits) => onRerender(edit.id, edits) : undefined
           }
           busy={busy}
+          takeDurations={takeDurations}
+          editId={edit.status === 'completed' ? edit.id : undefined}
         />
       )}
 

@@ -192,7 +192,38 @@ export interface EditTimeline {
   speech: TimelineSpeech[];
   /** Intervals where the music is ducked (speech + any user-muted regions). */
   duck?: TimelineSpeech[];
+  /** Intervals where the music fades in/out (applied on the saved run). */
+  fades?: TimelineSpeech[];
   music: TimelineMusic;
+}
+
+/** A pending per-clip edit collected on the timeline for a re-render. */
+export interface ClipEdit {
+  /** The clip `order` (1-based, as in the EDL) this edit targets. */
+  order: number;
+  /** Drop the clip from the re-rendered cut. */
+  remove?: boolean;
+  /** New source range start (seconds into the take); omit to keep. */
+  source_start?: number;
+  /** New source range end (seconds into the take); omit to keep. */
+  source_end?: number;
+  /** Apply voice enhancement to this clip. */
+  enhance?: boolean;
+}
+
+/** A pending music-region edit collected on the timeline for a re-render. */
+export interface MusicEdit {
+  start: number;
+  end: number;
+  /** "remove" ducks the music away; "fade" ramps it in/out. */
+  action: 'remove' | 'fade';
+}
+
+/** A timeline edit plan proposed by the AI assistant. */
+export interface TimelineAiPlan {
+  clips: ClipEdit[];
+  music: MusicEdit[];
+  explanation: string;
 }
 
 /** The edit decision list produced by the pipeline. */

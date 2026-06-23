@@ -174,8 +174,14 @@ pub struct RerenderRequest {
     /// "bursts" the user removed on the timeline.
     #[serde(default)]
     pub mute: Vec<MuteRegion>,
+    /// Regions (seconds, final timeline) to fade the music in/out across.
+    #[serde(default)]
+    pub fade: Vec<MuteRegion>,
+    /// Per-clip edits (trim source range / remove from the cut / enhance).
+    #[serde(default)]
+    pub clips: Vec<ClipEditReq>,
     /// Clip `order`s (1-based, as in the EDL) the user marked for voice
-    /// enhancement on the timeline.
+    /// enhancement on the timeline. Legacy/alternate to `clips[].enhance`.
     #[serde(default)]
     pub enhance_clips: Vec<i32>,
 }
@@ -186,8 +192,27 @@ pub struct MuteRegion {
     pub end: f32,
 }
 
-/// Re-render a run with timeline edits (muted music regions) into a new version,
-/// reusing the saved cut/transcripts (no transcription or LLM cost).
+/// A single clip edit on a re-render, identified by the clip `order` in the EDL.
+#[derive(Deserialize)]
+pub struct ClipEditReq {
+    pub order: i32,
+    /// Drop this clip from the re-rendered cut.
+    #[serde(default)]
+    pub remove: bool,
+    /// New source range start (seconds into the take); omit to keep.
+    #[serde(default)]
+    pub source_start: Option<f32>,
+    /// New source range end (seconds into the take); omit to keep.
+    #[serde(default)]
+    pub source_end: Option<f32>,
+    /// Apply voice enhancement to this clip.
+    #[serde(default)]
+    pub enhance: bool,
+}
+
+/// Re-render a run with timeline edits (trimmed/removed clips, muted/faded music
+/// regions, voice enhancement) into a new version, reusing the saved
+/// cut/transcripts (no transcription or LLM cost).
 #[post("/edits/{edit_id}/rerender")]
 async fn rerender_edit(
     pool: web::Data<DbPool>,
@@ -198,10 +223,24 @@ async fn rerender_edit(
 ) -> HttpResponse {
     let edit_id = path.into_inner();
     let mute: Vec<(f32, f32)> = body.mute.iter().map(|m| (m.start, m.end)).collect();
+    let fade: Vec<(f32, f32)> = body.fade.iter().map(|m| (m.start, m.end)).collect();
+    let clip_edits: Vec<edit_service::ClipEdit> = body
+        .clips
+        .iter()
+        .map(|c| edit_service::ClipEdit {
+            order: c.order,
+            remove: c.remove,
+            source_start: c.source_start,
+            source_end: c.source_end,
+            enhance: c.enhance,
+        })
+        .collect();
 
     match edit_service::start_rerender(
         edit_id,
         mute,
+        fade,
+        clip_edits,
         body.enhance_clips.clone(),
         pool.get_ref().clone(),
         config.get_ai_settings(),
@@ -212,6 +251,47 @@ async fn rerender_edit(
             "job_id": job_id,
             "message": "Re-render started",
         })),
+        Err(e) => HttpResponse::BadRequest().json(serde_json::json!({ "detail": e })),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct AiEditRequest {
+    /// Natural-language instruction, e.g. "trim the long pause at the end of clip
+    /// 3 and fade the music out over the last few seconds".
+    pub prompt: String,
+    /// Clip `order`s the user has selected on the timeline (focus hint).
+    #[serde(default)]
+    pub clip_orders: Vec<i32>,
+}
+
+/// Ask the LLM for a set of timeline edits (clip trims/removals/enhancement and
+/// music remove/fade) from a natural-language instruction. Returns a validated
+/// plan the frontend applies to the timeline; the user then re-renders. Reuses
+/// the saved transcripts — no re-transcription.
+#[post("/edits/{edit_id}/ai-edit")]
+async fn ai_edit(
+    pool: web::Data<DbPool>,
+    config: web::Data<ConfigManager>,
+    path: web::Path<i32>,
+    body: web::Json<AiEditRequest>,
+) -> HttpResponse {
+    let edit_id = path.into_inner();
+    let edit = {
+        let mut conn = pool.get().expect("Failed to get DB connection");
+        edit_service::get_edit_by_id(&mut conn, edit_id)
+    };
+    let edit = match edit {
+        Some(e) => e,
+        None => {
+            return HttpResponse::NotFound()
+                .json(serde_json::json!({ "detail": format!("Edit not found: {}", edit_id) }))
+        }
+    };
+
+    let ai = config.get_ai_settings();
+    match edit_service::plan_timeline_edits(&edit, &ai, &body.prompt, &body.clip_orders).await {
+        Ok(plan) => HttpResponse::Ok().json(plan),
         Err(e) => HttpResponse::BadRequest().json(serde_json::json!({ "detail": e })),
     }
 }
@@ -542,6 +622,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         .service(reveal_edit_output)
         .service(reveal_edit_by_id)
         .service(rerender_edit)
+        .service(ai_edit)
         .service(generate_copy)
         .service(edit_video)
         .service(edit_frame)
