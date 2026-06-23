@@ -445,6 +445,60 @@ pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps={fps}",
     }
 }
 
+/// Build the ffmpeg `volume` expression that automates the background music
+/// gain across the final timeline. The music sits at `full` when no one is
+/// speaking and drops to `duck` inside any `duck_intervals` (speech + any music
+/// the user "removed" on the timeline). For each `fade_intervals` region the
+/// gain ramps **up** from `duck` to `full` over the first ~second and back
+/// **down** to `duck` over the last ~second, so a music burst swells in and out
+/// instead of popping. Ducking takes precedence over fades where they overlap.
+///
+/// Kept as a pure function so the (fiddly) expression can be unit-tested without
+/// invoking ffmpeg.
+pub fn music_volume_expr(
+    full: f32,
+    duck: f32,
+    duck_intervals: &[(f32, f32)],
+    fade_intervals: &[(f32, f32)],
+) -> String {
+    let full = full.clamp(0.0, 1.0);
+    let duck = duck.clamp(0.0, full);
+
+    // duck = full inside any duck interval. `between()` returns 1 within [s,e];
+    // summing them is nonzero (→ true) anywhere a region applies.
+    let duck_cond = duck_intervals
+        .iter()
+        .filter(|(s, e)| e > s)
+        .map(|(s, e)| format!("between(t,{:.3},{:.3})", s, e))
+        .collect::<Vec<_>>()
+        .join("+");
+
+    // Each fade region contributes an `if(between(...), <ramp>, ...)` clause that
+    // ramps duck→full→duck across the region. Duck intervals are checked first
+    // (outermost), so speech still wins.
+    let mut expr = format!("{:.4}", full);
+    for (s, e) in fade_intervals.iter().filter(|(s, e)| e > s) {
+        let span = e - s;
+        // Fade length: up to ~1s, but never more than half the region so the
+        // ramps don't cross.
+        let f = (span / 2.0).clamp(0.01, 1.0);
+        let fade_in_end = s + f;
+        let fade_out_start = e - f;
+        let ramp_in = format!("{:.4}+({:.4})*(t-{:.3})/{:.3}", duck, full - duck, s, f);
+        let ramp_out = format!("{:.4}-({:.4})*(t-{:.3})/{:.3}", full, full - duck, fade_out_start, f);
+        let region_expr = format!(
+            "if(lt(t,{:.3}),{},if(gt(t,{:.3}),{},{:.4}))",
+            fade_in_end, ramp_in, fade_out_start, ramp_out, full
+        );
+        expr = format!("if(between(t,{:.3},{:.3}),{},{})", s, e, region_expr, expr);
+    }
+
+    if !duck_cond.is_empty() {
+        expr = format!("if({},{:.4},{})", duck_cond, duck, expr);
+    }
+    expr
+}
+
 /// Mix a background-music track under an existing video's audio and write the
 /// result to `out_path`, with **two explicit levels**: the looped music sits at
 /// `full_volume` when no one is speaking and at `duck_volume` while the voice is
@@ -454,35 +508,28 @@ pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps={fps}",
 /// timestamps), not by audio-level sidechain detection. This is deterministic
 /// and independent of how loud/quiet the speech was recorded — and a
 /// `duck_volume` of 0 truly silences the music during speech. The music's gain
-/// is automated with a `volume` expression that returns `duck_volume` inside any
-/// speech interval and `full_volume` everywhere else. The voice is mixed back at
+/// is automated with a `volume` expression (see [`music_volume_expr`]) that
+/// returns `duck_volume` inside any `duck` interval, `full_volume` everywhere
+/// else, and ramps in/out across any `fade` region. The voice is mixed back at
 /// full level and a limiter guards against clipping; the video stream is copied
-/// untouched. `speech` is a list of (start, end) intervals in seconds on the
-/// final timeline. Returns an error (with ffmpeg stderr) on failure.
+/// untouched. `duck` and `fade` are lists of (start, end) intervals in seconds
+/// on the final timeline. Returns an error (with ffmpeg stderr) on failure.
 pub fn add_background_music(
     video: &Path,
     music: &Path,
     full_volume: f32,
     duck_volume: f32,
-    speech: &[(f32, f32)],
+    duck: &[(f32, f32)],
+    fade: &[(f32, f32)],
     out_path: &Path,
 ) -> Result<(), String> {
     if let Some(parent) = out_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let full = full_volume.clamp(0.0, 1.0);
-    let duck = duck_volume.clamp(0.0, full);
+    let duck_v = duck_volume.clamp(0.0, full);
 
-    // Gain = duck inside any speech interval, full otherwise. `between()` returns
-    // 1 within [s,e]; summing them is nonzero (→ true) during speech.
-    let cond = speech
-        .iter()
-        .filter(|(s, e)| e > s)
-        .map(|(s, e)| format!("between(t,{:.3},{:.3})", s, e))
-        .collect::<Vec<_>>()
-        .join("+");
-    let cond = if cond.is_empty() { "0".to_string() } else { cond };
-    let vol_expr = format!("if({},{:.4},{:.4})", cond, duck, full);
+    let vol_expr = music_volume_expr(full, duck_v, duck, fade);
 
     let filter = format!(
         "[1:a]aformat=channel_layouts=stereo:sample_rates=48000,volume='{}':eval=frame[music];\
@@ -606,4 +653,46 @@ fn stderr_tail(stderr: &[u8]) -> String {
     let trimmed = s.trim();
     let start = trimmed.len().saturating_sub(600);
     trimmed[start..].to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn volume_expr_no_regions_is_constant_full() {
+        let e = music_volume_expr(0.3, 0.08, &[], &[]);
+        assert_eq!(e, "0.3000");
+    }
+
+    #[test]
+    fn volume_expr_ducks_inside_speech() {
+        let e = music_volume_expr(0.3, 0.08, &[(1.0, 2.0)], &[]);
+        // duck check is the outermost clause, dropping to the ducked level.
+        assert!(e.starts_with("if(between(t,1.000,2.000),0.0800,"));
+        assert!(e.ends_with("0.3000)"));
+    }
+
+    #[test]
+    fn volume_expr_fade_region_ramps_between_levels() {
+        let e = music_volume_expr(0.3, 0.08, &[], &[(0.0, 4.0)]);
+        // A fade region introduces a between() clause with an inner ramp.
+        assert!(e.contains("between(t,0.000,4.000)"));
+        assert!(e.contains("lt(t,"));
+        assert!(e.contains("gt(t,"));
+    }
+
+    #[test]
+    fn volume_expr_duck_takes_precedence_over_fade() {
+        let e = music_volume_expr(0.3, 0.08, &[(1.0, 2.0)], &[(0.0, 4.0)]);
+        // Speech ducking is evaluated first (outermost if).
+        assert!(e.starts_with("if(between(t,1.000,2.000),0.0800,"));
+    }
+
+    #[test]
+    fn volume_expr_clamps_duck_to_full() {
+        // duck above full is clamped down to full (no louder-while-talking).
+        let e = music_volume_expr(0.2, 0.9, &[(0.0, 1.0)], &[]);
+        assert!(e.contains(",0.2000,"));
+    }
 }

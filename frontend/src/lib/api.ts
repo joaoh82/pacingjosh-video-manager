@@ -10,6 +10,8 @@ import type {
   ProductionEdit,
   StartEditPayload,
   YoutubeCopy,
+  ClipEdit,
+  TimelineAiPlan,
 } from './types';
 
 declare global {
@@ -414,19 +416,44 @@ export async function deleteEdit(editId: number): Promise<void> {
 }
 
 /**
- * Re-render a run into a new version with timeline edits applied — `mute` is the
- * list of music regions (seconds, final timeline) to remove, `enhanceClips` is
- * the list of clip `order`s to apply voice enhancement to. Reuses the saved
+ * Re-render a run into a new version with timeline edits applied — `clips` are
+ * per-clip edits (trim source range / remove / enhance), `mute`/`fade` are music
+ * regions (seconds, final timeline) to remove or fade in/out. Reuses the saved
  * cut/transcription (no extra cost). Returns a job id to poll with getEditStatus.
  */
 export async function rerenderEdit(
   editId: number,
-  mute: { start: number; end: number }[],
-  enhanceClips: number[] = []
+  edits: {
+    clips?: ClipEdit[];
+    mute?: { start: number; end: number }[];
+    fade?: { start: number; end: number }[];
+  }
 ): Promise<StartEditResponse> {
   return fetchApi<StartEditResponse>(`/api/edits/${editId}/rerender`, {
     method: 'POST',
-    body: JSON.stringify({ mute, enhance_clips: enhanceClips }),
+    body: JSON.stringify({
+      clips: edits.clips ?? [],
+      mute: edits.mute ?? [],
+      fade: edits.fade ?? [],
+    }),
+  });
+}
+
+/**
+ * Ask the AI to propose timeline edits from a natural-language instruction. The
+ * returned plan (clip trims/removals/enhancement + music remove/fade) is applied
+ * to the timeline for the user to review, then re-render. `clipOrders` are the
+ * clips the user has selected (a focus hint). Reuses saved transcripts — no cost
+ * beyond one LLM call.
+ */
+export async function aiEditTimeline(
+  editId: number,
+  prompt: string,
+  clipOrders: number[] = []
+): Promise<TimelineAiPlan> {
+  return fetchApi<TimelineAiPlan>(`/api/edits/${editId}/ai-edit`, {
+    method: 'POST',
+    body: JSON.stringify({ prompt, clip_orders: clipOrders }),
   });
 }
 

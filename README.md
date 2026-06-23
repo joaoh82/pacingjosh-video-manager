@@ -45,6 +45,12 @@ Pre-built installers for every release are published on the **[Releases page →
 >
 > Installers are **unsigned** (no code-signing certificates are configured), so the OS shows the usual "unverified developer" prompts. [Releases & CI](#releases--ci) explains how to enable signing.
 
+## 📖 Documentation
+
+- [**User Guide**](docs/user-guide.md) — how to scan, search, tag, manage productions, run the edit pipeline, and edit the cut on the interactive timeline.
+- [**AI Features**](docs/ai-features.md) — transcription, AI cut planning, AI timeline edits, social/YouTube copy, and thumbnail restyle: providers, keys, and tips.
+- [**Data storage**](docs/data-storage.md) — where the index, thumbnails, settings, and rendered outputs live, plus backup/reset/uninstall.
+
 ## Features
 
 ### Video Management
@@ -76,12 +82,14 @@ Pre-built installers for every release are published on the **[Releases page →
 - **Edit & Create Video Pipeline** - Add raw takes to a production, paste your script, and the app transcribes every take (with word-level timestamps), asks an LLM to assemble the best cut (newest clean takes, re-shoots in timeline order, warm-up "Hey …" intros trimmed), writes an **edit decision list** as JSON, then stitches the final clip with FFmpeg — all tracked with live progress
 - **Burned-in Captions** - Optionally burn the spoken words onto the final video, re-timed per clip from the transcript
 - **Tighten the Cut** - Optionally remove long silences and filler ("um"/"uh") inside clips, splitting each into speech-only sub-clips (jump cuts) for a tighter result
-- **Enhance Voice** - CapCut-style noise removal: rolls off wind/handling rumble, knocks down steady background hiss, strips mouth clicks/pops, and adds a gentle clarity boost so the cleaned voice doesn't sound muffled. A single **intensity** slider (0–100%) controls how aggressive the cleanup is. Pick takes two ways: **before** rendering, check them in the take list (each take has a thumbnail + click-to-**preview** so you can see/hear what it is first); or **after** rendering, click a clip on the interactive timeline and re-render with it enhanced. Runs entirely through bundled FFmpeg filters — no extra API keys
+- **Enhance Voice** - CapCut-style noise removal: rolls off wind/handling rumble, knocks down steady background hiss, strips mouth clicks/pops, and adds a gentle clarity boost so the cleaned voice doesn't sound muffled. A single **intensity** slider (0–100%) controls how aggressive the cleanup is. Pick takes two ways: **before** rendering, check them in the take list (each take has a thumbnail + click-to-**preview** so you can see/hear what it is first); or **after** rendering, select a clip on the interactive timeline and toggle "✨ Enhance voice" in the inspector, then re-render. Runs entirely through bundled FFmpeg filters — no extra API keys
 - **Background Music** - Optionally pick a music track that loops under the speech, with two configurable levels: a volume for when no one is talking and a lower volume for while you're talking. Ducking is driven by the transcript's word timestamps (not audio detection), so it works regardless of how quietly the speech was recorded — and a talking volume of 0% truly silences the music while you speak
 - **Choose Output Location** - Pick the output folder; each run is written to a numbered version subfolder (`productions/v1`, `productions/v2`, …) so re-edits never overwrite each other. The folder you pick stays fixed (no nested production-name folders, nothing in the app's data directory)
 - **YouTube Copy** - One click on a finished run generates 3 SEO-optimized title options, a YouTube description, keyword tags, and thumbnail-text ideas — built from the final cut's transcript and saved with the run
 - **Thumbnail Builder** - Grab a real still frame from the final video (scrub the slider and the preview updates live) and lay stylized text on top in an in-app canvas editor (font size, color, outline, position, CAPS; thumbnail-text suggestions one click away). Export a 1280×720 PNG or save it next to the video. Optional **✨ AI restyle** sends the frame to your chosen image model for a more produced look while the text stays a real overlay. The image **provider & model are configurable** in Settings (Google Gemini or OpenAI GPT Image — e.g. `gpt-image-2`, `gemini-2.5-flash-image`); requires the matching API key
-- **Interactive Timeline** - Each finished run shows an editor-style timeline (like CapCut) with an in-app **preview player**: play the rendered video and a red playhead tracks across the timeline; click or drag the ruler to scrub and the video jumps to that point — handy for spotting which clips still need work. Below it, a video track with clip thumbnails, a voice track showing where speech is, and a music track whose bar height drops to the ducked level under speech. Zoom/scroll in, **click a video clip to mark it for voice enhancement** (🎙 marks clips already enhanced), click the music "bursts" you don't want to remove them, then re-render a new version — reusing the saved cut and transcription (no extra transcription cost)
+- **Interactive Timeline** - Each finished run shows an editor-style timeline (like CapCut) with an in-app **preview player**: play the rendered video and a red playhead tracks across the timeline; click or drag the ruler to scrub and the video jumps to that point — handy for spotting which clips still need work. Below it, a video track with clip thumbnails, a voice track showing where speech is, and a music track whose bar height drops to the ducked level under speech. Zoom/scroll in, then re-render a new version — reusing the saved cut and transcription (no extra transcription cost)
+- **Edit the Cut on the Timeline** - After a render you can fine-tune the cut without re-running the whole pipeline. **Select a clip** (or several) to open an inspector: **trim** it by dragging its edges or typing exact in/out points (great for shortening a long-running take), **remove** it from the cut entirely (restore it later from the "Removed" chips), or toggle **voice enhancement** (🎙 marks clips already enhanced). Click a music "burst" to choose **Remove** (duck it away) or **Fade in/out** (ramp it smoothly). Hit re-render and a new version is cut from the saved takes — no re-transcription or re-planning
+- **AI Timeline Edits** - Don't want to fiddle by hand? Select one or more clips, hit **✨ Ask AI**, and describe what you want in plain English — "trim the long pause at the end of this clip", "drop the rambling intro", "fade the music out over the last few seconds". The model reads the saved cut and per-clip transcript, proposes the trims/removals/enhancement and music remove/fade, and applies them to the timeline for you to review before re-rendering (one LLM call, no re-transcription)
 - **Edit History** - Every run is saved per production; reopen the modal to browse past runs, view their script, edit decision list, timeline, and activity log, reveal the final video, or delete a run (removing its database entry and its files from disk)
 - **Editable Prompts** - Both the copy-generation prompt and the edit-planning prompt are editable in Settings
 - **Local Keys** - API keys are stored locally in `config.json` and never returned by the API after saving
@@ -459,7 +467,8 @@ GET    /api/productions/{id}/edit          - Latest persisted edit result (EDL +
 GET    /api/productions/{id}/edits         - Full edit history (newest first)
 POST   /api/productions/{id}/edit/reveal   - Reveal the latest final video in the file browser
 POST   /api/edits/{edit_id}/reveal         - Reveal a specific run's final video
-POST   /api/edits/{edit_id}/rerender       - Re-render a new version (body: muted music regions + enhance_clips clip orders)
+POST   /api/edits/{edit_id}/rerender       - Re-render a new version (body: clip edits trim/remove/enhance + muted/faded music regions)
+POST   /api/edits/{edit_id}/ai-edit        - Ask the LLM for timeline edits from a prompt (returns a plan to apply)
 GET    /api/edits/{edit_id}/video          - Stream a run's final video (range-enabled) for the in-app preview player
 POST   /api/edits/{edit_id}/copy           - Generate YouTube copy (titles/description/tags/thumbnail)
 GET    /api/edits/{edit_id}/frame?t=<sec>  - Grab a 1280x720 still frame from the final video
@@ -477,6 +486,13 @@ plus optional `instructions`, `output_name`, `captions` (default `true`), `tight
 no one is talking, default `0.3`), and `music_duck_volume` (level while talking, default `0.08`).
 `POST /api/edits/{edit_id}/reveal` reveals a specific run's final video; `DELETE
 /api/edits/{edit_id}` removes a run and its files.
+
+`POST /api/edits/{edit_id}/rerender` re-cuts a finished run into a new version from the saved takes
+(no re-transcription/re-planning). Body: `clips` (per-clip edits — `order` plus optional `remove`,
+`source_start`/`source_end` to re-trim, `enhance`), `mute` (music regions `{start,end}` to duck
+away), and `fade` (regions to ramp the music in/out). `POST /api/edits/{edit_id}/ai-edit` takes a
+natural-language `prompt` (and optional `clip_orders` focus hint) and returns a validated edit plan
+(`clips`, `music`, `explanation`) for the timeline to apply before re-rendering.
 
 ## Database Schema
 
