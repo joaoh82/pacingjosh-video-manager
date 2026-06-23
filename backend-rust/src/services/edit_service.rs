@@ -639,7 +639,7 @@ fn rerender_inner(
         enhance_flags,
         opts.enhance_voice_intensity,
     );
-    edl_value["timeline"] = build_timeline(cut_list, &speech, &duck, fade, opts, music_name.as_deref(), enhance_flags);
+    edl_value["timeline"] = build_timeline(cut_list, &speech, &duck, mute, fade, opts, music_name.as_deref(), enhance_flags);
     let pretty = serde_json::to_string_pretty(&edl_value).unwrap_or_else(|_| "{}".to_string());
     std::fs::write(&edl_path, &pretty).map_err(|e| format!("Failed to write EDL JSON: {}", e))?;
 
@@ -856,7 +856,7 @@ fn run_edit_inner(
         &enhance_flags,
         opts.enhance_voice_intensity,
     );
-    edl_value["timeline"] = build_timeline(&cut_list, &speech_timeline, &speech_timeline, &[], opts, music_name.as_deref(), &enhance_flags);
+    edl_value["timeline"] = build_timeline(&cut_list, &speech_timeline, &speech_timeline, &[], &[], opts, music_name.as_deref(), &enhance_flags);
     let pretty = serde_json::to_string_pretty(&edl_value).unwrap_or_else(|_| "{}".to_string());
     std::fs::write(&edl_path, &pretty).map_err(|e| format!("Failed to write EDL JSON: {}", e))?;
     log_msg(edit_map, job_id, &format!("Wrote edit decision list to {}", edl_path.display()));
@@ -1304,6 +1304,7 @@ fn build_timeline(
     resolved: &[ResolvedClipInternal],
     speech: &[(f32, f32)],
     duck: &[(f32, f32)],
+    muted: &[(f32, f32)],
     fade: &[(f32, f32)],
     opts: &EditOptions,
     music_name: Option<&str>,
@@ -1346,6 +1347,7 @@ fn build_timeline(
         "clips": clips,
         "speech": to_json(speech),
         "duck": to_json(duck),
+        "muted": to_json(muted),
         "fades": to_json(fade),
         "music": {
             "present": music_present,

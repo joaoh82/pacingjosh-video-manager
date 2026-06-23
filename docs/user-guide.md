@@ -219,7 +219,10 @@ open a small menu:
   and back down at the end (no abrupt pops).
 - **↺ Keep music as‑is** — clears the action.
 
-Removed regions show red; faded regions show amber.
+Removed regions show red; faded regions show amber. Music edits are **sticky** —
+they're remembered on the rendered version and stay applied (shown selected) when
+you reopen it or re-render again, including when you also trim/remove clips in the
+same pass.
 
 ### Ask AI to do it for you
 

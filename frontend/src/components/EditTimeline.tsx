@@ -113,6 +113,9 @@ export default function EditTimeline({
   // Pending edits.
   const [clipEdits, setClipEdits] = useState<Record<number, ClipEditState>>({});
   const [musicActions, setMusicActions] = useState<Record<string, 'remove' | 'fade'>>({});
+  // The music actions seeded from this run (its already-applied removes/fades),
+  // so we can tell genuine new edits from the sticky baseline.
+  const seedRef = useRef<Record<string, 'remove' | 'fade'>>({});
   const [selected, setSelected] = useState<number[]>([]);
 
   // Playback position (seconds, original render) mirrored by the playhead.
@@ -136,10 +139,12 @@ export default function EditTimeline({
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiNote, setAiNote] = useState<string | null>(null);
 
-  // Reset everything when the underlying run changes.
+  // Reset everything when the underlying run changes — but SEED the music
+  // actions from what was persisted on this run (its muted/faded regions) so
+  // earlier music edits stay applied across re-renders (sticky), shown as
+  // selected and re-sent on the next render.
   useEffect(() => {
     setClipEdits({});
-    setMusicActions({});
     setSelected([]);
     setDragPreview(null);
     setMenu(null);
@@ -149,6 +154,21 @@ export default function EditTimeline({
     setAiPrompt('');
     setAiError(null);
     setAiNote(null);
+
+    const dur0 = timeline.duration > 0 ? timeline.duration : 1;
+    const regions = regionsFrom(timeline.speech, dur0);
+    const covers = (s: number, e: number, list?: TimelineSpeech[]) => {
+      const mid = (s + e) / 2;
+      return !!list?.some((m) => mid >= m.start && mid <= m.end);
+    };
+    const seed: Record<string, 'remove' | 'fade'> = {};
+    for (const r of regions) {
+      if (r.talking) continue;
+      if (covers(r.start, r.end, timeline.muted)) seed[`${Math.round(r.start * 10)}_${Math.round(r.end * 10)}`] = 'remove';
+      else if (covers(r.start, r.end, timeline.fades)) seed[`${Math.round(r.start * 10)}_${Math.round(r.end * 10)}`] = 'fade';
+    }
+    seedRef.current = seed;
+    setMusicActions(seed);
   }, [timeline]);
 
   useEffect(() => {
@@ -236,12 +256,6 @@ export default function EditTimeline({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [timeline, laid]
   );
-  const editedDuck = useMemo(
-    () => remapIntervals(timeline.duck && timeline.duck.length ? timeline.duck : timeline.speech),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [timeline, laid]
-  );
-  const regions = useMemo(() => regionsFrom(editedDuck, dur), [editedDuck, dur]);
 
   // Map a time on the ORIGINAL render onto the edited timeline (for the playhead).
   const remapPoint = (tOld: number): number => {
@@ -275,18 +289,42 @@ export default function EditTimeline({
   const X = (t: number) => t * pxPerSec;
   const Wd = (a: number, b: number) => Math.max(0, (b - a) * pxPerSec);
 
-  // --- Music region actions ----------------------------------------------------
+  // --- Music regions & actions -------------------------------------------------
+  // Music actions are keyed by the region's position on the SAVED timeline (a
+  // stable identity), so they survive clip trims/removals: each region is shown
+  // at its remapped (edited) position, but its action persists under the saved
+  // key. Regions are partitioned by speech (talking = ducked, not editable) and
+  // overlaid with the user's remove/fade choices.
   const mk = (start: number, end: number) =>
     `${Math.round(start * 10)}_${Math.round(end * 10)}`;
-  const setRegionAction = (start: number, end: number, action: 'remove' | 'fade' | null) => {
-    const key = mk(start, end);
+
+  // Non-overlapping talking/not-talking regions on the SAVED timeline.
+  const savedRegions = useMemo(
+    () => regionsFrom(timeline.speech, timeline.duration > 0 ? timeline.duration : 1),
+    [timeline]
+  );
+
+  // Each saved region, projected onto the edited timeline (es..ee). Collapsed
+  // regions (inside a removed clip) get es≈ee and are skipped when rendering.
+  const musicRegions = useMemo(
+    () =>
+      savedRegions.map((r) => ({
+        talking: r.talking,
+        key: mk(r.start, r.end),
+        es: remapPoint(r.start),
+        ee: remapPoint(r.end),
+      })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [savedRegions, laid]
+  );
+
+  const setActionForKey = (key: string, action: 'remove' | 'fade' | null) =>
     setMusicActions((prev) => {
       const next = { ...prev };
       if (action === null) delete next[key];
       else next[key] = action;
       return next;
     });
-  };
 
   // --- Clip selection / edits --------------------------------------------------
   const toggleSelect = (order: number) => {
@@ -323,7 +361,7 @@ export default function EditTimeline({
     });
   const resetEdits = () => {
     setClipEdits({});
-    setMusicActions({});
+    setMusicActions(seedRef.current); // back to this run's already-applied music
     setSelected([]);
     setDragPreview(null);
     setAiNote(null);
@@ -360,13 +398,17 @@ export default function EditTimeline({
       }
       if (changed) clips.push(entry);
     }
+    // Music actions are sent in EDITED (final) coordinates — the position each
+    // region maps to after the clip edits — so they line up with the cut the
+    // backend rebuilds. Regions collapsed by a clip removal are skipped.
     const mute: { start: number; end: number }[] = [];
     const fade: { start: number; end: number }[] = [];
-    for (const r of regions) {
+    for (const r of musicRegions) {
       if (r.talking) continue;
-      const a = musicActions[mk(r.start, r.end)];
-      if (a === 'remove') mute.push({ start: round2(r.start), end: round2(r.end) });
-      else if (a === 'fade') fade.push({ start: round2(r.start), end: round2(r.end) });
+      const a = musicActions[r.key];
+      if (!a || r.ee - r.es <= 0.05) continue;
+      if (a === 'remove') mute.push({ start: round2(r.es), end: round2(r.ee) });
+      else fade.push({ start: round2(r.es), end: round2(r.ee) });
     }
     return { clips, mute, fade };
   };
@@ -375,7 +417,16 @@ export default function EditTimeline({
   const nClipEdits = pendingEdits.clips.length;
   const nMute = pendingEdits.mute.length;
   const nFade = pendingEdits.fade.length;
-  const hasEdits = nClipEdits + nMute + nFade > 0;
+  // Music is "changed" only relative to what this run already had applied (the
+  // seeded baseline), so reopening a run with sticky mutes doesn't look like an
+  // unsaved edit. The re-render still SENDS all active mutes/fades to keep them.
+  const musicChanged = useMemo(() => {
+    const seed = seedRef.current;
+    const cur = Object.keys(musicActions);
+    const base = Object.keys(seed);
+    return cur.length !== base.length || cur.some((k) => musicActions[k] !== seed[k]);
+  }, [musicActions]);
+  const hasEdits = nClipEdits > 0 || musicChanged;
 
   // --- AI assistant ------------------------------------------------------------
   const applyPlan = (plan: TimelineAiPlan) => {
@@ -391,20 +442,18 @@ export default function EditTimeline({
       }
       return next;
     });
-    // Music regions come back in ORIGINAL-timeline coords; map onto the edited
-    // timeline and tag any overlapping non-talking region.
+    // Music regions come back in SAVED-timeline coords (the AI reads the saved
+    // cut), which is the same frame as our saved-region keys — tag any region
+    // whose midpoint the AI's range covers.
     const incoming = (plan.music ?? []) as MusicEdit[];
     if (incoming.length) {
       setMusicActions((prev) => {
         const next = { ...prev };
         for (const m of incoming) {
-          const a = remapPoint(m.start);
-          const b = remapPoint(m.end);
-          for (const r of regions) {
+          for (const r of savedRegions) {
             if (r.talking) continue;
-            const os = Math.max(r.start, a);
-            const oe = Math.min(r.end, b);
-            if (oe - os > 0.05) next[mk(r.start, r.end)] = m.action;
+            const mid = (r.start + r.end) / 2;
+            if (mid >= m.start && mid <= m.end) next[mk(r.start, r.end)] = m.action;
           }
         }
         return next;
@@ -945,8 +994,9 @@ export default function EditTimeline({
 
             {/* Music — click a tall (playing) bar to remove / fade it */}
             <div className="relative bg-gray-200/60 dark:bg-gray-800 rounded overflow-hidden" style={{ height: 44 }}>
-              {regions.map((r, i) => {
-                const action = r.talking ? undefined : musicActions[mk(r.start, r.end)];
+              {musicRegions.map((r, i) => {
+                if (r.ee - r.es <= 0.01) return null; // collapsed by a clip removal
+                const action = r.talking ? undefined : musicActions[r.key];
                 const removed = action === 'remove';
                 const faded = action === 'fade';
                 const playing = !r.talking && !removed;
@@ -962,21 +1012,21 @@ export default function EditTimeline({
                     key={i}
                     onClick={(e) => {
                       if (r.talking || !musicEditable) return;
-                      setMenu({ key: mk(r.start, r.end), x: e.clientX, y: e.clientY });
+                      setMenu({ key: r.key, x: e.clientX, y: e.clientY });
                     }}
                     title={
                       r.talking
                         ? `ducked → ${Math.round(duck * 100)}%`
                         : removed
-                        ? `removed · ${fmtTime(r.start)}–${fmtTime(r.end)} (click to change)`
+                        ? `removed · ${fmtTime(r.es)}–${fmtTime(r.ee)} (click to change)`
                         : faded
-                        ? `fade in/out · ${fmtTime(r.start)}–${fmtTime(r.end)} (click to change)`
-                        : `music ${Math.round(full * 100)}% · ${fmtTime(r.start)}–${fmtTime(r.end)} (click for options)`
+                        ? `fade in/out · ${fmtTime(r.es)}–${fmtTime(r.ee)} (click to change)`
+                        : `music ${Math.round(full * 100)}% · ${fmtTime(r.es)}–${fmtTime(r.ee)} (click for options)`
                     }
                     className={`absolute bottom-0 ${cls}`}
                     style={{
-                      left: X(r.start),
-                      width: Wd(r.start, r.end),
+                      left: X(r.es),
+                      width: Wd(r.es, r.ee),
                       height: `${(r.talking || removed ? duckFrac : 1) * 100}%`,
                     }}
                   />
@@ -1039,8 +1089,7 @@ export default function EditTimeline({
               type="button"
               className="block w-full text-left px-3 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-700"
               onClick={() => {
-                const [s, e] = menu.key.split('_').map((n) => parseInt(n, 10) / 10);
-                setRegionAction(s, e, 'remove');
+                setActionForKey(menu.key, 'remove');
                 setMenu(null);
               }}
             >
@@ -1050,8 +1099,7 @@ export default function EditTimeline({
               type="button"
               className="block w-full text-left px-3 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-700"
               onClick={() => {
-                const [s, e] = menu.key.split('_').map((n) => parseInt(n, 10) / 10);
-                setRegionAction(s, e, 'fade');
+                setActionForKey(menu.key, 'fade');
                 setMenu(null);
               }}
             >
@@ -1062,8 +1110,7 @@ export default function EditTimeline({
                 type="button"
                 className="block w-full text-left px-3 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500"
                 onClick={() => {
-                  const [s, e] = menu.key.split('_').map((n) => parseInt(n, 10) / 10);
-                  setRegionAction(s, e, null);
+                  setActionForKey(menu.key, null);
                   setMenu(null);
                 }}
               >

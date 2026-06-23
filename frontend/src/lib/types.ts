@@ -192,6 +192,8 @@ export interface EditTimeline {
   speech: TimelineSpeech[];
   /** Intervals where the music is ducked (speech + any user-muted regions). */
   duck?: TimelineSpeech[];
+  /** Music regions the user removed on the saved run (kept sticky on reopen). */
+  muted?: TimelineSpeech[];
   /** Intervals where the music fades in/out (applied on the saved run). */
   fades?: TimelineSpeech[];
   music: TimelineMusic;
