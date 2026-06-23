@@ -208,7 +208,9 @@ on a dedicated OS thread, picks a free localhost port at startup, and serves
 the static-exported Next.js frontend from an embedded WebView. Per-user app
 data lives at `%APPDATA%\com.pacingjosh.video-manager\` (Windows),
 `~/Library/Application Support/com.pacingjosh.video-manager/` (macOS), or
-`~/.local/share/com.pacingjosh.video-manager/` (Linux).
+`~/.local/share/com.pacingjosh.video-manager/` (Linux). See
+[**docs/data-storage.md**](docs/data-storage.md) for exactly what's stored there
+(database, thumbnails, config + API keys) and what isn't.
 
 ## Quick Start (Web Dev Workflow)
 
@@ -388,6 +390,16 @@ app's data directory.
 *Configure the video directory, thumbnails, and your AI / LLM providers, models, and keys*
 
 ## Configuration
+
+### Where your data is stored
+
+The desktop app keeps its database, thumbnails, and settings (including AI API
+keys) in a per-user app-data folder — `%APPDATA%\com.pacingjosh.video-manager\` on
+Windows, `~/Library/Application Support/com.pacingjosh.video-manager/` on macOS,
+and `~/.local/share/com.pacingjosh.video-manager/` on Linux. Your source videos
+and rendered edit outputs live elsewhere (in place / in the output folder you
+pick). See [**docs/data-storage.md**](docs/data-storage.md) for the full breakdown,
+plus backup, reset, and uninstall notes.
 
 ### Backend Configuration
 
