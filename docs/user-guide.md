@@ -267,15 +267,29 @@ Each piece has a one‑click **Copy** button. Click **Regenerate** for a fresh s
 
 ## 9. Thumbnail builder
 
-Click **Make thumbnail** on a finished run:
+Click **Make thumbnail** on a finished run (it reads **Edit thumbnail** once one
+has been saved):
 
 1. **Scrub** the slider to grab a real still frame from the final video (the
    preview updates live).
-2. Lay **stylized text** on top — font size, color, outline, position, CAPS;
-   thumbnail‑text suggestions are one click away.
-3. Optionally **✨ AI restyle** the frame for a more produced look (the text stays
-   a real overlay). The image provider/model is configurable in Settings.
-4. **Download PNG** (1280×720) or **Save to folder** (next to the video).
+2. Lay **stylized text** on top — font size, outline, text/edge colors, CAPS, and
+   **alignment** (left / center / right); thumbnail‑text suggestions are one click
+   away.
+3. **Position the text anywhere** — drag it directly on the image, or use the
+   **X** and **Y** sliders for precision (so you can tuck it into a corner, not
+   just move it up and down).
+4. Optionally **✨ AI style text** to have the LLM design a punchy treatment
+   (colors, gradient, drop shadow, highlight band) — or set a **Band**/**Shadow**
+   yourself. **Reset style** returns to plain text.
+5. Optionally **✨ AI restyle frame** for a more produced background look (the text
+   stays a real overlay). The image provider/model is configurable in Settings.
+6. **Download PNG** (1280×720) or **Save to folder** (next to the video).
+
+**Saved thumbnails persist.** Saving writes the finished PNG next to the video,
+keeps the (possibly AI‑restyled) background still alongside it, and records the
+full builder state — text, position, alignment, colors/style, and the frame
+time — with the run. Reopen the run later and the thumbnail comes back exactly as
+you left it, ready to re‑edit.
 
 ---
 
@@ -288,7 +302,8 @@ the **History** sidebar to:
 - Select a run to see its **script**, **edit decision list**, **timeline**, and
   **activity log**, and to **Reveal final video**.
 - **Delete** a run — removes its database row *and* its files from disk (the
-  video, the EDL JSON, and the now‑empty version folder).
+  video, the EDL JSON, any saved thumbnail/background, and the now‑empty version
+  folder).
 - Click **＋ New edit** to start another run.
 
 ---

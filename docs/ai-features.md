@@ -21,8 +21,8 @@ independent provider slots, each with a model field, plus the API keys.
 | Slot | What it powers | Providers | Example models |
 | --- | --- | --- | --- |
 | **Transcription** | Speech‑to‑text for the edit pipeline and per‑video copy | ElevenLabs, OpenAI, Google Gemini | `scribe_v1`, `whisper-1`, `gemini-2.0-flash` |
-| **Text / LLM** | Planning the cut, AI timeline edits, social & YouTube copy | Google Gemini, OpenAI, Anthropic | `gemini-2.0-flash`, `gpt-4o`, `claude-sonnet-4-6` |
-| **Image** | ✨ AI thumbnail restyle | Google Gemini, OpenAI (GPT Image) | `gemini-2.5-flash-image`, `gpt-image-2` |
+| **Text / LLM** | Planning the cut, AI timeline edits, social & YouTube copy, ✨ AI thumbnail text styling | Google Gemini, OpenAI, Anthropic | `gemini-2.0-flash`, `gpt-4o`, `claude-sonnet-4-6` |
+| **Image** | ✨ AI thumbnail frame restyle | Google Gemini, OpenAI (GPT Image) | `gemini-2.5-flash-image`, `gpt-image-2` |
 
 ### API keys
 
@@ -148,18 +148,33 @@ i.e. an ElevenLabs/Whisper transcription, not Gemini.
 
 ---
 
-## 6. AI thumbnail restyle
+## 6. AI thumbnail styling
 
-In the **thumbnail builder**, after grabbing a frame you can click **✨ AI
-restyle** to send that still to your **image** provider/model for a more produced,
-cinematic look. Your overlaid text stays a real overlay for crispness — the model
-only restyles the background image.
+The **thumbnail builder** has two independent AI helpers. Both keep your text a
+real canvas overlay, so the words always stay crisp and editable.
+
+### ✨ AI restyle frame (image model)
+
+After grabbing a frame, click **✨ AI restyle frame** to send that still to your
+**image** provider/model for a more produced, cinematic background.
 
 - **OpenAI GPT Image** renders/edits photos more permissively and handles text in
   images best; **Gemini** is cheaper.
 - Editing close‑up shots of **real, identifiable faces** may be refused by either
   provider — that's a provider policy, not an app limitation.
 - Requires the matching API key (Gemini or OpenAI).
+
+### ✨ AI style text (text model)
+
+Click **✨ AI style text** to have your **Text / LLM** provider design an
+eye‑catching treatment for the caption — bold colors, an optional top‑to‑bottom
+gradient, a soft drop shadow, and an optional colored highlight band — instead of
+plain white‑with‑an‑outline. You can add a one‑line direction ("bold red and
+aggressive", "clean minimal white") and the model tailors the look to the
+caption and the video's topic. The result drops into the editor's controls, so
+you can tweak colors, alignment, position, and the band/shadow afterwards, or
+**Reset style** to go back to plain text. Uses your text LLM key only — no image
+generation, no extra cost beyond a small completion.
 
 ---
 
@@ -184,8 +199,8 @@ filters** — no keys, no network, no cost:
   stay on your machine. Source videos and rendered outputs never leave it.
 - **What gets sent to providers:** extracted **audio** (for transcription) and
   **text** (transcripts, your script/instructions/prompts) for planning, copy, and
-  timeline edits; a single **still frame** for thumbnail restyle. Only when you
-  trigger the action.
+  timeline edits, and thumbnail **text styling**; a single **still frame** for
+  thumbnail frame restyle. Only when you trigger the action.
 - **Cost scales** with the number/length of takes (transcription + planning) and
   the size of prompts (copy, timeline edits). Re‑renders and manual timeline edits
   reuse saved transcripts, so they don't re‑transcribe — the only paid AI call on

@@ -25,6 +25,7 @@ pub struct ProductionEdit {
     pub transcripts_json: Option<String>,
     pub options_json: Option<String>,
     pub copy_json: Option<String>,
+    pub thumbnail_json: Option<String>,
 }
 
 #[derive(Debug, Insertable)]
@@ -66,6 +67,9 @@ pub struct ProductionEditResponse {
     pub created_at: NaiveDateTime,
     /// Generated YouTube copy (titles / description / tags / thumbnail text).
     pub copy: Option<serde_json::Value>,
+    /// Persisted thumbnail builder state (text/layout/style + frame time), so the
+    /// thumbnail can be rebuilt and edited after reopening. `null` if none saved.
+    pub thumbnail: Option<serde_json::Value>,
 }
 
 impl From<ProductionEdit> for ProductionEditResponse {
@@ -81,6 +85,10 @@ impl From<ProductionEdit> for ProductionEditResponse {
             .unwrap_or_default();
         let copy = e
             .copy_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
+        let thumbnail = e
+            .thumbnail_json
             .as_deref()
             .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
         Self {
@@ -99,6 +107,7 @@ impl From<ProductionEdit> for ProductionEditResponse {
             text_model: e.text_model,
             created_at: e.created_at,
             copy,
+            thumbnail,
         }
     }
 }

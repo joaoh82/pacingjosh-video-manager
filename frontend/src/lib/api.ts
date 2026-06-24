@@ -12,6 +12,8 @@ import type {
   YoutubeCopy,
   ClipEdit,
   TimelineAiPlan,
+  ThumbnailSpec,
+  ThumbnailTextStyle,
 } from './types';
 
 declare global {
@@ -509,13 +511,33 @@ export async function restyleEditFrame(
   return res.blob();
 }
 
-/** Save a finished thumbnail (base64/data-URL PNG) next to the run's video. */
+/** AI-design a text-style treatment for the thumbnail caption (text stays a
+ *  real overlay; only colors/gradient/outline/shadow/highlight are generated). */
+export async function generateEditTextStyle(
+  editId: number,
+  payload: { text: string; context?: string; prompt?: string }
+): Promise<ThumbnailTextStyle> {
+  return fetchApi<ThumbnailTextStyle>(`/api/edits/${editId}/text-style`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+/** URL of a run's saved thumbnail background still (404s if none saved yet).
+ *  `bust` cache-busts so a freshly-saved background reloads. */
+export function editThumbnailBgUrl(editId: number, bust?: number | string): string {
+  const q = bust !== undefined ? `?v=${encodeURIComponent(String(bust))}` : '';
+  return apiUrl(`/api/edits/${editId}/thumbnail-bg${q}`);
+}
+
+/** Save a finished thumbnail next to the run's video and persist its builder
+ *  state (so it can be rebuilt/re-edited after reopening). */
 export async function saveEditThumbnail(
   editId: number,
-  imageBase64: string
+  payload: { image: string; background?: string; spec?: ThumbnailSpec }
 ): Promise<{ path: string }> {
   return fetchApi<{ path: string }>(`/api/edits/${editId}/thumbnail`, {
     method: 'POST',
-    body: JSON.stringify({ image: imageBase64 }),
+    body: JSON.stringify(payload),
   });
 }

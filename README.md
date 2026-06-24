@@ -48,7 +48,7 @@ Pre-built installers for every release are published on the **[Releases page →
 ## 📖 Documentation
 
 - [**User Guide**](docs/user-guide.md) — how to scan, search, tag, manage productions, run the edit pipeline, and edit the cut on the interactive timeline.
-- [**AI Features**](docs/ai-features.md) — transcription, AI cut planning, AI timeline edits, social/YouTube copy, and thumbnail restyle: providers, keys, and tips.
+- [**AI Features**](docs/ai-features.md) — transcription, AI cut planning, AI timeline edits, social/YouTube copy, and thumbnail styling (text + frame restyle): providers, keys, and tips.
 - [**Data storage**](docs/data-storage.md) — where the index, thumbnails, settings, and rendered outputs live, plus backup/reset/uninstall.
 
 ## Features
@@ -86,7 +86,7 @@ Pre-built installers for every release are published on the **[Releases page →
 - **Background Music** - Optionally pick a music track that loops under the speech, with two configurable levels: a volume for when no one is talking and a lower volume for while you're talking. Ducking is driven by the transcript's word timestamps (not audio detection), so it works regardless of how quietly the speech was recorded — and a talking volume of 0% truly silences the music while you speak
 - **Choose Output Location** - Pick the output folder; each run is written to a numbered version subfolder (`productions/v1`, `productions/v2`, …) so re-edits never overwrite each other. The folder you pick stays fixed (no nested production-name folders, nothing in the app's data directory)
 - **YouTube Copy** - One click on a finished run generates 3 SEO-optimized title options, a YouTube description, keyword tags, and thumbnail-text ideas — built from the final cut's transcript and saved with the run
-- **Thumbnail Builder** - Grab a real still frame from the final video (scrub the slider and the preview updates live) and lay stylized text on top in an in-app canvas editor (font size, color, outline, position, CAPS; thumbnail-text suggestions one click away). Export a 1280×720 PNG or save it next to the video. Optional **✨ AI restyle** sends the frame to your chosen image model for a more produced look while the text stays a real overlay. The image **provider & model are configurable** in Settings (Google Gemini or OpenAI GPT Image — e.g. `gpt-image-2`, `gemini-2.5-flash-image`); requires the matching API key
+- **Thumbnail Builder** - Grab a real still frame from the final video (scrub the slider and the preview updates live) and lay stylized text on top in an in-app canvas editor (font size, outline, text/edge colors, CAPS, **left/center/right alignment**; thumbnail-text suggestions one click away). **Position the text anywhere** — drag it directly on the image or use the X/Y sliders — so you can tuck it into a corner, not just nudge it up and down. **✨ AI style text** asks your text LLM for a punchy treatment (bold colors, gradient, drop shadow, highlight band) instead of plain white-with-an-outline, with an optional one-line direction; you can also flip a **Band**/**Shadow** on yourself or **Reset style**. Optional **✨ AI restyle frame** sends the still to your chosen image model for a more produced background while the text stays a real, crisp overlay (image **provider & model configurable** in Settings — Google Gemini or OpenAI GPT Image, e.g. `gpt-image-2`, `gemini-2.5-flash-image`). Export a 1280×720 PNG or save it next to the video — **saved thumbnails persist**: the PNG, its background still, and the full editable state (text, position, alignment, style, frame time) come back with the run so you can re-edit later
 - **Interactive Timeline** - Each finished run shows an editor-style timeline (like CapCut) with an in-app **preview player**: play the rendered video and a red playhead tracks across the timeline; click or drag the ruler to scrub and the video jumps to that point — handy for spotting which clips still need work. Below it, a video track with clip thumbnails, a voice track showing where speech is, and a music track whose bar height drops to the ducked level under speech. Zoom/scroll in, then re-render a new version — reusing the saved cut and transcription (no extra transcription cost)
 - **Edit the Cut on the Timeline** - After a render you can fine-tune the cut without re-running the whole pipeline. **Select a clip** (or several) to open an inspector: **trim** it by dragging its edges or typing exact in/out points (great for shortening a long-running take), **remove** it from the cut entirely (restore it later from the "Removed" chips), or toggle **voice enhancement** (🎙 marks clips already enhanced). Click a music "burst" to choose **Remove** (duck it away) or **Fade in/out** (ramp it smoothly). Hit re-render and a new version is cut from the saved takes — no re-transcription or re-planning
 - **AI Timeline Edits** - Don't want to fiddle by hand? Select one or more clips, hit **✨ Ask AI**, and describe what you want in plain English — "trim the long pause at the end of this clip", "drop the rambling intro", "fade the music out over the last few seconds". The model reads the saved cut and per-clip transcript, proposes the trims/removals/enhancement and music remove/fade, and applies them to the timeline for you to review before re-rendering (one LLM call, no re-transcription)
@@ -327,7 +327,7 @@ npm run dev
    - Stitch the final clip with FFmpeg (mixing in music if provided).
 6. When it finishes, review the per-clip breakdown and click **Reveal final video** to open it in your file browser.
 7. Click **Generate copy** for SEO YouTube title options, a description, tags, and thumbnail-text ideas (built from the final cut's transcript).
-8. Click **Make thumbnail** to grab a frame, add stylized text (optionally ✨ AI-restyle the frame with Gemini), and **Save to folder** / **Download PNG**.
+8. Click **Make thumbnail** to grab a frame, add text and drag it into position (with alignment + colors), optionally **✨ AI style text** for a punchy treatment or **✨ AI restyle frame** for a produced background, then **Save to folder** / **Download PNG**. Saved thumbnails reopen ready to edit.
 
 Every run is saved. Reopen the modal any time to browse the **history** for that production —
 select a past run to see its script, edit decision list, and activity log; **delete** it (removes
@@ -472,8 +472,10 @@ POST   /api/edits/{edit_id}/ai-edit        - Ask the LLM for timeline edits from
 GET    /api/edits/{edit_id}/video          - Stream a run's final video (range-enabled) for the in-app preview player
 POST   /api/edits/{edit_id}/copy           - Generate YouTube copy (titles/description/tags/thumbnail)
 GET    /api/edits/{edit_id}/frame?t=<sec>  - Grab a 1280x720 still frame from the final video
-POST   /api/edits/{edit_id}/restyle        - AI-restyle a frame via Gemini's image model (needs Gemini key)
-POST   /api/edits/{edit_id}/thumbnail      - Save a finished thumbnail PNG next to the video
+POST   /api/edits/{edit_id}/restyle        - AI-restyle a frame via the image model (needs Gemini/OpenAI key)
+POST   /api/edits/{edit_id}/text-style     - AI-design a text style (colors/gradient/shadow/band) via the text LLM
+POST   /api/edits/{edit_id}/thumbnail      - Save a thumbnail PNG + background still and persist its editable state
+GET    /api/edits/{edit_id}/thumbnail-bg   - Saved thumbnail background still (for rebuilding the thumbnail on reopen)
 DELETE /api/edits/{edit_id}                - Delete a run (DB row + files on disk)
 GET    /api/browse-folder                  - OS folder picker (output location)
 GET    /api/browse-file                    - OS file picker (background music)

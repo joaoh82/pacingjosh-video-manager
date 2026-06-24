@@ -1066,17 +1066,25 @@ function EditDetail({
         <div className="card">
           <div className="flex items-center justify-between gap-3 mb-2">
             <div>
-              <h3 className="font-semibold text-gray-900 dark:text-white">Thumbnail</h3>
+              <h3 className="font-semibold text-gray-900 dark:text-white">
+                Thumbnail
+                {edit.thumbnail && (
+                  <span className="ml-2 text-xs font-normal text-green-600 dark:text-green-400">
+                    ✓ saved
+                  </span>
+                )}
+              </h3>
               <p className="text-xs text-gray-500 dark:text-gray-400">
-                Grab a real frame from the final video and lay stylized text on top. Optional ✨ AI
-                restyle (Gemini) for a more produced look.
+                Grab a real frame from the final video and lay stylized text on top. Drag to position,
+                pick alignment, and ✨ AI-style the text or restyle the frame. Saved thumbnails reopen
+                ready to edit.
               </p>
             </div>
             <button
               onClick={() => setThumbOpen((o) => !o)}
               className="btn btn-secondary text-sm whitespace-nowrap"
             >
-              {thumbOpen ? 'Close' : 'Make thumbnail'}
+              {thumbOpen ? 'Close' : edit.thumbnail ? 'Edit thumbnail' : 'Make thumbnail'}
             </button>
           </div>
           {thumbOpen && (
@@ -1084,6 +1092,8 @@ function EditDetail({
               editId={edit.id}
               duration={thumbDuration}
               suggestedTexts={copy?.thumbnail_texts ?? []}
+              saved={edit.thumbnail ?? null}
+              context={copy?.titles?.[0] ?? edit.script?.slice(0, 200) ?? ''}
             />
           )}
         </div>

@@ -55,9 +55,12 @@ com.pacingjosh.video-manager/
 - **Your source video files.** They stay wherever your scanned video directory
   points; the app only indexes them in place and never copies or moves them.
 - **Rendered edit outputs.** The "Edit & Create Video" pipeline writes the final
-  `.mp4`, its `.json` edit decision list, and any thumbnails to the **output folder
-  you choose** for that run (`<output>/productions/v1`, `v2`, …). By design,
-  **nothing** from the edit pipeline is written to the app-data directory.
+  `.mp4`, its `.json` edit decision list, and any saved thumbnail (`…-thumbnail.png`
+  plus its background still `…-thumbnail-bg.png`) to the **output folder you
+  choose** for that run (`<output>/productions/v1`, `v2`, …). By design,
+  **nothing** from the edit pipeline is written to the app-data directory. (The
+  thumbnail's editable *state* — text, position, colors — is metadata, saved with
+  the run inside `database.db`, so it reopens ready to edit.)
 - **FFmpeg.** It ships bundled inside the app (a Tauri sidecar), not in app-data.
 
 ## Backup, reset, and uninstall
