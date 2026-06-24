@@ -192,19 +192,25 @@ export default function ThumbnailEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Live frame preview: debounce slider changes. Skips the very first run (the
-  // initial frame is loaded by the hydration effect above).
-  const firstTRef = useRef(true);
-  useEffect(() => {
-    if (firstTRef.current) {
-      firstTRef.current = false;
-      return;
-    }
+  // Fetch a fresh frame when the user picks a new time on the slider. Driven
+  // explicitly from the slider handler (debounced) rather than a reactive effect
+  // on `t`, so a re-mount / React StrictMode double-invoke can never clobber a
+  // restored, AI-restyled background with a plain frame.
+  const frameDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pickFrameTime = (nextT: number) => {
+    setT(nextT);
     setRestyled(false); // picking a new frame drops any AI restyle
-    const id = setTimeout(() => loadFrame(() => fetchEditFrame(editId, t)), 160);
-    return () => clearTimeout(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [t, editId]);
+    if (frameDebounceRef.current) clearTimeout(frameDebounceRef.current);
+    frameDebounceRef.current = setTimeout(() => {
+      loadFrame(() => fetchEditFrame(editId, nextT));
+    }, 160);
+  };
+  useEffect(
+    () => () => {
+      if (frameDebounceRef.current) clearTimeout(frameDebounceRef.current);
+    },
+    []
+  );
 
   // Redraw whenever the frame or any text/layout/style changes.
   useEffect(() => {
@@ -454,7 +460,7 @@ export default function ThumbnailEditor({
           max={Math.max(0.1, duration)}
           step={0.1}
           value={t}
-          onChange={(e) => setT(parseFloat(e.target.value))}
+          onChange={(e) => pickFrameTime(parseFloat(e.target.value))}
           className="flex-1"
         />
         <button
