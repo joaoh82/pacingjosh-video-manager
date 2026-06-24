@@ -49,15 +49,47 @@ jobs:
           default_bump: ${{ inputs.default_bump }}
           dry_run: true
 
+      # Guard against the silent-no-op trap: a commit like "@ feat: ..." (any
+      # stray characters before the type) is NOT a valid Conventional Commit, so
+      # the analyzer above ignores it and computes no bump — meaning a release
+      # that should have happened quietly does nothing. We flag commits that
+      # clearly *intend* to be conventional (they contain feat/fix/etc. + ":")
+      # but don't START with the type. Well-formed non-releasing commits
+      # (chore:, docs:, ...) and free-form/merge commits are NOT flagged, so the
+      # legitimate "nothing to release" path keeps working.
+      - name: Lint commits for malformed Conventional Commits
+        id: lint
+        run: |
+          last_tag=$(git describe --tags --abbrev=0 2>/dev/null || true)
+          if [ -n "$last_tag" ]; then range="$last_tag..HEAD"; else range="HEAD"; fi
+          types='feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert'
+          malformed=0
+          while IFS= read -r subject; do
+            [ -z "$subject" ] && continue
+            # Properly formed header: starts with type, optional (scope), optional !, then ": "
+            if printf '%s' "$subject" | grep -Eq "^($types)(\([^)]+\))?!?: "; then
+              continue
+            fi
+            # Looks like it wanted to be conventional but the type isn't at the start.
+            if printf '%s' "$subject" | grep -Eq "($types)(\([^)]+\))?!?:"; then
+              malformed=$((malformed + 1))
+              echo "::warning::Malformed Conventional Commit (type not at start, will be ignored by the release analyzer): $subject"
+            fi
+          done < <(git log "$range" --no-merges --format='%s')
+          echo "malformed_count=$malformed" >> "$GITHUB_OUTPUT"
+
       - name: Decide whether to release
         id: decide
         run: |
-          if [ -z "${{ steps.tag.outputs.release_type }}" ]; then
-            echo "::notice::No releasable commits since the last tag (and no default_bump set) — nothing to tag."
-            echo "release_created=false" >> "$GITHUB_OUTPUT"
-          else
+          if [ -n "${{ steps.tag.outputs.release_type }}" ]; then
             echo "Releasing ${{ steps.tag.outputs.new_tag }} (${{ steps.tag.outputs.release_type }})."
             echo "release_created=true" >> "$GITHUB_OUTPUT"
+          elif [ "${{ steps.lint.outputs.malformed_count }}" -gt 0 ]; then
+            echo "::error::No version bump was computed, but ${{ steps.lint.outputs.malformed_count }} commit(s) since the last tag look like malformed Conventional Commits (see the warnings above). The release analyzer ignored them, so nothing would be released. Fix the commit subjects so they START with 'feat:'/'fix:'/etc. (no leading characters), or re-run this workflow with the 'default_bump' input set to patch/minor/major to force a release."
+            exit 1
+          else
+            echo "::notice::No releasable commits since the last tag (and no default_bump set) — nothing to tag."
+            echo "release_created=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Bump version files
