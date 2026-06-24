@@ -462,12 +462,66 @@ crisp and vibrant. Do NOT add any text or logos.",
 }
 
 #[derive(Deserialize)]
-pub struct SaveThumbnailRequest {
-    /// Base64 PNG (optionally a `data:image/png;base64,...` data URL).
-    pub image: String,
+pub struct TextStyleRequest {
+    /// The caption text being styled (so the model can tailor the treatment).
+    #[serde(default)]
+    pub text: String,
+    /// Optional topic/title context (e.g. a chosen SEO title) for relevance.
+    #[serde(default)]
+    pub context: Option<String>,
+    /// Optional extra direction ("make it red and aggressive", "minimal", …).
+    #[serde(default)]
+    pub prompt: Option<String>,
 }
 
-/// Save a finished thumbnail PNG next to the run's final video.
+/// Ask the text LLM to design an eye-catching style for the thumbnail caption
+/// (colors/gradient/outline/shadow/highlight band). The text stays a real
+/// overlay; only the style is generated. Returns a normalized style object.
+#[post("/edits/{edit_id}/text-style")]
+async fn text_style(
+    config: web::Data<ConfigManager>,
+    _path: web::Path<i32>,
+    body: web::Json<TextStyleRequest>,
+) -> HttpResponse {
+    let text = body.text.trim();
+    if text.is_empty() {
+        return HttpResponse::BadRequest()
+            .json(serde_json::json!({ "detail": "Add some thumbnail text first, then style it." }));
+    }
+    let context = body.context.as_deref().unwrap_or("");
+    let prompt = body.prompt.as_deref().unwrap_or("");
+
+    let ai = config.get_ai_settings();
+    match ai_service::generate_text_style(text, context, prompt, &ai).await {
+        Ok(style) => HttpResponse::Ok().json(style),
+        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({ "detail": e })),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct SaveThumbnailRequest {
+    /// Composited thumbnail PNG (optionally a `data:image/png;base64,...` URL).
+    pub image: String,
+    /// The (possibly AI-restyled) background still the text was laid over, PNG.
+    /// Persisted so the thumbnail rebuilds exactly on reopen. Optional.
+    #[serde(default)]
+    pub background: Option<String>,
+    /// Thumbnail builder state (text/layout/style/frame time) to persist so the
+    /// thumbnail can be re-edited later. Optional.
+    #[serde(default)]
+    pub spec: Option<serde_json::Value>,
+}
+
+/// Decode a base64 string that may be bare or a `data:...;base64,` data URL.
+fn decode_image_data(data: &str) -> Result<Vec<u8>, String> {
+    let b64 = data.split(',').next_back().unwrap_or("").trim();
+    STANDARD
+        .decode(b64)
+        .map_err(|e| format!("Bad image data: {}", e))
+}
+
+/// Save a finished thumbnail (composited PNG + background still) next to the
+/// run's final video and persist its builder state so it survives reopening.
 #[post("/edits/{edit_id}/thumbnail")]
 async fn save_thumbnail(
     pool: web::Data<DbPool>,
@@ -480,20 +534,64 @@ async fn save_thumbnail(
         None => return HttpResponse::NotFound().json(serde_json::json!({ "detail": "Final video not found" })),
     };
 
-    let b64 = body.image.split(',').last().unwrap_or("").trim();
-    let bytes = match STANDARD.decode(b64) {
+    let bytes = match decode_image_data(&body.image) {
         Ok(b) => b,
-        Err(e) => return HttpResponse::BadRequest().json(serde_json::json!({ "detail": format!("Bad image data: {}", e) })),
+        Err(e) => return HttpResponse::BadRequest().json(serde_json::json!({ "detail": e })),
     };
 
-    let out_path = Path::new(&out);
-    let parent = out_path.parent().unwrap_or_else(|| Path::new("."));
-    let stem = out_path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "thumbnail".to_string());
-    let thumb_path = parent.join(format!("{}-thumbnail.png", stem));
+    let (thumb_path, thumb_bg_path) = edit_service::thumbnail_file_paths(&out);
 
-    match std::fs::write(&thumb_path, &bytes) {
-        Ok(()) => HttpResponse::Ok().json(serde_json::json!({ "path": thumb_path.to_string_lossy() })),
-        Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({ "detail": format!("Failed to save: {}", e) })),
+    if let Err(e) = std::fs::write(&thumb_path, &bytes) {
+        return HttpResponse::InternalServerError()
+            .json(serde_json::json!({ "detail": format!("Failed to save: {}", e) }));
+    }
+
+    // Persist the background still so an AI restyle (or the exact frame) can be
+    // restored when the thumbnail is reopened.
+    if let Some(bg) = body.background.as_deref() {
+        match decode_image_data(bg) {
+            Ok(bg_bytes) => {
+                if let Err(e) = std::fs::write(&thumb_bg_path, &bg_bytes) {
+                    log::warn!("Failed to save thumbnail background: {}", e);
+                }
+            }
+            Err(e) => log::warn!("Bad thumbnail background data: {}", e),
+        }
+    }
+
+    // Persist the builder state (text/layout/style/frame time) onto the row.
+    if let Some(spec) = body.spec.as_ref() {
+        let mut conn = pool.get().expect("Failed to get DB connection");
+        if let Err(e) = edit_service::save_thumbnail_spec(&mut conn, edit_id, spec) {
+            log::warn!("Failed to persist thumbnail spec: {}", e);
+        }
+    }
+
+    HttpResponse::Ok().json(serde_json::json!({ "path": thumb_path.to_string_lossy() }))
+}
+
+/// Serve the saved background still for a run's thumbnail (the possibly
+/// AI-restyled image the text was laid over), so the editor can rebuild it.
+#[get("/edits/{edit_id}/thumbnail-bg")]
+async fn thumbnail_bg(
+    pool: web::Data<DbPool>,
+    path: web::Path<i32>,
+    req: HttpRequest,
+) -> HttpResponse {
+    let edit_id = path.into_inner();
+    let out = match edit_output_path(pool.get_ref(), edit_id) {
+        Some(p) => p,
+        None => return HttpResponse::NotFound().json(serde_json::json!({ "detail": "Final video not found" })),
+    };
+    let (_, bg_path) = edit_service::thumbnail_file_paths(&out);
+    if !bg_path.is_file() {
+        return HttpResponse::NotFound()
+            .json(serde_json::json!({ "detail": "No saved thumbnail background" }));
+    }
+    match NamedFile::open_async(&bg_path).await {
+        Ok(file) => file.use_last_modified(true).into_response(&req),
+        Err(e) => HttpResponse::NotFound()
+            .json(serde_json::json!({ "detail": format!("Could not open background: {}", e) })),
     }
 }
 
@@ -627,6 +725,8 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
         .service(edit_video)
         .service(edit_frame)
         .service(restyle_frame)
+        .service(text_style)
         .service(save_thumbnail)
+        .service(thumbnail_bg)
         .service(delete_edit);
 }

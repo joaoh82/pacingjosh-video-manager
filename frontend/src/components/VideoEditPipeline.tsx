@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo } from 'react';
 import ThumbnailEditor from './ThumbnailEditor';
-import { Production, EditJobStatus, ProductionEdit, YoutubeCopy, Video } from '@/lib/types';
+import { Production, EditJobStatus, ProductionEdit, YoutubeCopy, ThumbnailSpec, Video } from '@/lib/types';
 import {
   startProductionEdit,
   getEditStatus,
@@ -839,6 +839,9 @@ function EditDetail({
 
   // Thumbnail builder
   const [thumbOpen, setThumbOpen] = useState(false);
+  // Held locally so the "✓ saved" badge / "Edit thumbnail" label update the
+  // moment a thumbnail is saved, without waiting for a modal reopen.
+  const [thumbnail, setThumbnail] = useState<ThumbnailSpec | null>(edit.thumbnail ?? null);
   const thumbDuration =
     edit.edl?.timeline?.duration && edit.edl.timeline.duration > 0
       ? edit.edl.timeline.duration
@@ -849,6 +852,10 @@ function EditDetail({
     setCopyErr(null);
     setCopiedKey(null);
   }, [edit.id, edit.copy]);
+
+  useEffect(() => {
+    setThumbnail(edit.thumbnail ?? null);
+  }, [edit.id, edit.thumbnail]);
 
   const toClipboard = (key: string, text: string) => {
     navigator.clipboard
@@ -1066,17 +1073,25 @@ function EditDetail({
         <div className="card">
           <div className="flex items-center justify-between gap-3 mb-2">
             <div>
-              <h3 className="font-semibold text-gray-900 dark:text-white">Thumbnail</h3>
+              <h3 className="font-semibold text-gray-900 dark:text-white">
+                Thumbnail
+                {thumbnail && (
+                  <span className="ml-2 text-xs font-normal text-green-600 dark:text-green-400">
+                    ✓ saved
+                  </span>
+                )}
+              </h3>
               <p className="text-xs text-gray-500 dark:text-gray-400">
-                Grab a real frame from the final video and lay stylized text on top. Optional ✨ AI
-                restyle (Gemini) for a more produced look.
+                Grab a real frame from the final video and lay stylized text on top. Drag to position,
+                pick alignment, and ✨ AI-style the text or restyle the frame. Saved thumbnails reopen
+                ready to edit.
               </p>
             </div>
             <button
               onClick={() => setThumbOpen((o) => !o)}
               className="btn btn-secondary text-sm whitespace-nowrap"
             >
-              {thumbOpen ? 'Close' : 'Make thumbnail'}
+              {thumbOpen ? 'Close' : thumbnail ? 'Edit thumbnail' : 'Make thumbnail'}
             </button>
           </div>
           {thumbOpen && (
@@ -1084,6 +1099,9 @@ function EditDetail({
               editId={edit.id}
               duration={thumbDuration}
               suggestedTexts={copy?.thumbnail_texts ?? []}
+              saved={thumbnail}
+              context={copy?.titles?.[0] ?? edit.script?.slice(0, 200) ?? ''}
+              onSaved={setThumbnail}
             />
           )}
         </div>

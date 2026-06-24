@@ -93,6 +93,7 @@ diesel::table! {
         transcripts_json -> Nullable<Text>,
         options_json -> Nullable<Text>,
         copy_json -> Nullable<Text>,
+        thumbnail_json -> Nullable<Text>,
     }
 }
 

@@ -288,6 +288,40 @@ export interface ProductionEdit {
   created_at: string;
   /** Generated YouTube copy, if any. */
   copy?: YoutubeCopy | null;
+  /** Saved thumbnail builder state, if a thumbnail was saved for this run. */
+  thumbnail?: ThumbnailSpec | null;
+}
+
+/** A renderable text treatment for a thumbnail caption (canvas overlay). */
+export interface ThumbnailTextStyle {
+  /** Solid text color (used when `gradient` is null). */
+  fill: string;
+  /** Optional top→bottom gradient fill. */
+  gradient: { from: string; to: string } | null;
+  outlineColor: string;
+  outlineWidth: number;
+  shadowColor: string;
+  shadowBlur: number;
+  shadowOffsetY: number;
+  /** Optional colored band drawn behind the text. */
+  highlight: { color: string; textColor: string } | null;
+}
+
+/** Persisted thumbnail builder state — enough to rebuild and re-edit it. */
+export interface ThumbnailSpec {
+  text: string;
+  fontSize: number;
+  uppercase: boolean;
+  align: 'left' | 'center' | 'right';
+  /** Horizontal anchor, 0–1 of width. */
+  posX: number;
+  /** Vertical anchor, 0–1 of height. */
+  posY: number;
+  /** Frame time (seconds) the background still was grabbed from. */
+  frameTime: number;
+  /** Whether the saved background was AI-restyled. */
+  restyled: boolean;
+  style: ThumbnailTextStyle;
 }
 
 /** Payload for starting an edit pipeline run. */

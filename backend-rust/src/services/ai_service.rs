@@ -471,6 +471,165 @@ fn truncate_err(s: &str) -> String {
     }
 }
 
+// --- AI thumbnail text styling ----------------------------------------------
+
+/// Ask the text LLM to design an eye-catching text treatment (colors, gradient,
+/// outline, shadow, optional highlight band) for a thumbnail caption. The text
+/// itself stays a real canvas overlay — only the *style* is generated, so the
+/// words remain crisp and accurate. Returns a normalized, clamped style object
+/// (camelCase) that drops straight into the editor's renderer.
+pub async fn generate_text_style(
+    text: &str,
+    context: &str,
+    user_prompt: &str,
+    ai: &AiSettings,
+) -> Result<serde_json::Value, String> {
+    let prompt = build_text_style_prompt(text, context, user_prompt);
+    let raw = complete(&prompt, ai, 700).await?;
+    parse_text_style(&raw)
+}
+
+fn build_text_style_prompt(text: &str, context: &str, user_prompt: &str) -> String {
+    let extra = user_prompt.trim();
+    let extra_line = if extra.is_empty() {
+        "none".to_string()
+    } else {
+        extra.to_string()
+    };
+    let topic = if context.trim().is_empty() {
+        "unknown"
+    } else {
+        context.trim()
+    };
+    format!(
+        r##"You are a senior YouTube thumbnail typographer. Design a bold, high-contrast TEXT
+treatment that maximizes click-through for the caption below. Avoid plain
+white-with-a-black-outline unless it is genuinely the strongest choice — prefer
+punchy color, an optional top-to-bottom gradient, a soft drop shadow for
+legibility, and (when it fits) a colored highlight band behind the words.
+
+Return ONLY a JSON object with EXACTLY these keys (no markdown, no commentary):
+{{
+  "fill": "#RRGGBB",                       // solid text color (used when gradient is null)
+  "gradient": null | {{ "from": "#RRGGBB", "to": "#RRGGBB" }},  // top->bottom gradient, or null
+  "outlineColor": "#RRGGBB",
+  "outlineWidth": 0-32,                     // stroke thickness in px; 0 = no outline
+  "shadowColor": "#RRGGBB",
+  "shadowBlur": 0-48,
+  "shadowOffsetY": 0-24,
+  "highlight": null | {{ "color": "#RRGGBB", "textColor": "#RRGGBB" }}  // band behind text, or null
+}}
+
+Rules:
+- Every color is a #RRGGBB hex string.
+- Ensure strong contrast between the text and whatever sits behind it (band or video frame).
+- When you set a highlight band, pick a "textColor" that pops against the band "color".
+- Keep it legible at small sizes. Do not add any keys beyond those listed.
+
+CAPTION: "{text}"
+VIDEO TOPIC: "{topic}"
+EXTRA DIRECTION: "{extra}""##,
+        text = text.trim(),
+        topic = topic,
+        extra = extra_line,
+    )
+}
+
+/// Parse + normalize the model's style JSON into the exact camelCase shape the
+/// canvas renderer expects, clamping numbers and validating hex colors so a
+/// loose model response can never produce an unrenderable style.
+fn parse_text_style(raw: &str) -> Result<serde_json::Value, String> {
+    let json = extract_json_object(raw)
+        .ok_or("The model did not return a JSON text style.".to_string())?;
+    Ok(build_style(&json))
+}
+
+/// Extract the first balanced top-level `{...}` object from a model response
+/// (tolerates ```json fences and surrounding prose).
+fn extract_json_object(raw: &str) -> Option<serde_json::Value> {
+    let start = raw.find('{')?;
+    let end = raw.rfind('}')?;
+    if end <= start {
+        return None;
+    }
+    serde_json::from_str(&raw[start..=end]).ok()
+}
+
+fn pick<'a>(v: &'a serde_json::Value, keys: &[&str]) -> Option<&'a serde_json::Value> {
+    keys.iter()
+        .filter_map(|k| v.get(*k))
+        .find(|x| !x.is_null())
+}
+
+/// Validate a `#RRGGBB`/`#RGB` hex (case-insensitive), expanding shorthand and
+/// falling back to `default` for anything malformed.
+fn norm_hex(v: Option<&serde_json::Value>, default: &str) -> String {
+    let raw = v.and_then(|x| x.as_str()).unwrap_or("").trim();
+    let body = raw.strip_prefix('#').unwrap_or(raw);
+    if !body.chars().all(|c| c.is_ascii_hexdigit()) {
+        return default.to_string();
+    }
+    match body.len() {
+        6 => format!("#{}", body.to_lowercase()),
+        3 => {
+            let mut out = String::from("#");
+            for c in body.chars() {
+                out.push(c.to_ascii_lowercase());
+                out.push(c.to_ascii_lowercase());
+            }
+            out
+        }
+        _ => default.to_string(),
+    }
+}
+
+fn norm_num(v: Option<&serde_json::Value>, default: f32, min: f32, max: f32) -> f32 {
+    v.and_then(|x| x.as_f64())
+        .map(|x| x as f32)
+        .unwrap_or(default)
+        .clamp(min, max)
+}
+
+fn build_style(json: &serde_json::Value) -> serde_json::Value {
+    let gradient = pick(json, &["gradient"]).and_then(|g| {
+        if g.is_null() {
+            return None;
+        }
+        let from = pick(g, &["from", "start", "top"]);
+        let to = pick(g, &["to", "end", "bottom"]);
+        if from.is_none() && to.is_none() {
+            return None;
+        }
+        Some(serde_json::json!({
+            "from": norm_hex(from, "#ffd200"),
+            "to": norm_hex(to, "#ff6a00"),
+        }))
+    });
+
+    let highlight = pick(json, &["highlight", "band", "background"]).and_then(|h| {
+        if h.is_null() {
+            return None;
+        }
+        let color = pick(h, &["color", "bg", "background", "fill"]);
+        color?;
+        Some(serde_json::json!({
+            "color": norm_hex(color, "#e11d2a"),
+            "textColor": norm_hex(pick(h, &["textColor", "text_color"]), "#ffffff"),
+        }))
+    });
+
+    serde_json::json!({
+        "fill": norm_hex(pick(json, &["fill", "color", "textColor", "text_color"]), "#ffffff"),
+        "gradient": gradient,
+        "outlineColor": norm_hex(pick(json, &["outlineColor", "outline_color", "stroke", "edgeColor"]), "#000000"),
+        "outlineWidth": norm_num(pick(json, &["outlineWidth", "outline_width", "strokeWidth"]), 10.0, 0.0, 32.0),
+        "shadowColor": norm_hex(pick(json, &["shadowColor", "shadow_color"]), "#000000"),
+        "shadowBlur": norm_num(pick(json, &["shadowBlur", "shadow_blur"]), 0.0, 0.0, 48.0),
+        "shadowOffsetY": norm_num(pick(json, &["shadowOffsetY", "shadow_offset_y", "shadowOffset"]), 0.0, 0.0, 24.0),
+        "highlight": highlight,
+    })
+}
+
 /// Run a single JSON-mode completion against the configured text provider and
 /// return the raw response text. Shared by social-copy generation and the
 /// video-edit planning step.
@@ -665,4 +824,51 @@ pub fn upsert_generation(
     }
 
     get_generation(conn, video_id).ok_or_else(|| "Failed to reload saved generation".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_text_style_normalizes_and_clamps() {
+        let raw = r##"Here you go:
+        ```json
+        {
+          "fill": "FFF",
+          "gradient": { "from": "#FFD200", "to": "ff6a00" },
+          "outlineColor": "#000",
+          "outlineWidth": 999,
+          "shadowColor": "#101010",
+          "shadowBlur": 30,
+          "shadowOffsetY": -5,
+          "highlight": { "color": "#E11D2A", "textColor": "#FFFFFF" }
+        }
+        ```"##;
+        let style = parse_text_style(raw).expect("should parse");
+        assert_eq!(style["fill"], "#ffffff"); // 3-digit shorthand expanded
+        assert_eq!(style["gradient"]["from"], "#ffd200");
+        assert_eq!(style["gradient"]["to"], "#ff6a00"); // missing '#' tolerated
+        assert_eq!(style["outlineColor"], "#000000");
+        assert_eq!(style["outlineWidth"], 32.0); // clamped to max
+        assert_eq!(style["shadowOffsetY"], 0.0); // clamped to min
+        assert_eq!(style["highlight"]["color"], "#e11d2a");
+        assert_eq!(style["highlight"]["textColor"], "#ffffff");
+    }
+
+    #[test]
+    fn parse_text_style_falls_back_for_bad_values() {
+        let raw = r#"{ "fill": "not-a-color", "gradient": null, "highlight": null }"#;
+        let style = parse_text_style(raw).expect("should parse");
+        assert_eq!(style["fill"], "#ffffff"); // invalid hex -> default
+        assert!(style["gradient"].is_null());
+        assert!(style["highlight"].is_null());
+        assert_eq!(style["outlineColor"], "#000000"); // missing -> default
+        assert_eq!(style["outlineWidth"], 10.0); // missing -> default
+    }
+
+    #[test]
+    fn parse_text_style_rejects_non_json() {
+        assert!(parse_text_style("the model refused").is_err());
+    }
 }

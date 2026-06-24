@@ -1747,6 +1747,37 @@ pub fn save_copy(
         .map_err(|e| e.to_string())
 }
 
+/// Save the thumbnail builder state (text/layout/style/frame time) onto an edit
+/// row so the thumbnail can be rebuilt and re-edited later.
+pub fn save_thumbnail_spec(
+    conn: &mut diesel::sqlite::SqliteConnection,
+    edit_id: i32,
+    spec: &serde_json::Value,
+) -> Result<(), String> {
+    diesel::update(production_edits::table.find(edit_id))
+        .set(production_edits::thumbnail_json.eq(Some(spec.to_string())))
+        .execute(conn)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// The sidecar thumbnail files derived from a run's final video path:
+/// `(composited PNG, background PNG)`. The background is the (possibly
+/// AI-restyled) still the text was laid over — kept so the thumbnail rebuilds
+/// exactly on reopen. Naming is shared by the save route and delete cleanup.
+pub fn thumbnail_file_paths(output_path: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let out = std::path::Path::new(output_path);
+    let parent = out.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let stem = out
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "thumbnail".to_string());
+    (
+        parent.join(format!("{}-thumbnail.png", stem)),
+        parent.join(format!("{}-thumbnail-bg.png", stem)),
+    )
+}
+
 /// Delete an edit: remove its files from disk (final video, EDL JSON, and the
 /// now-empty version folder) and delete the database row. Returns `false` if no
 /// such edit exists.
@@ -1768,6 +1799,19 @@ pub fn delete_edit(
         if path.is_file() {
             if let Err(e) = std::fs::remove_file(path) {
                 warn!("Failed to delete {}: {}", p, e);
+            }
+        }
+    }
+
+    // Remove the thumbnail sidecar files (composited PNG + saved background) so
+    // the version folder can still be reclaimed as "empty" below.
+    if let Some(out) = edit.output_path.as_deref() {
+        let (thumb, thumb_bg) = thumbnail_file_paths(out);
+        for path in [thumb, thumb_bg] {
+            if path.is_file() {
+                if let Err(e) = std::fs::remove_file(&path) {
+                    warn!("Failed to delete {}: {}", path.display(), e);
+                }
             }
         }
     }
