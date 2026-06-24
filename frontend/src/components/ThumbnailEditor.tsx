@@ -34,6 +34,9 @@ interface ThumbnailEditorProps {
   saved?: ThumbnailSpec | null;
   /** Topic/title context, used to make AI text styling more relevant. */
   context?: string;
+  /** Called with the saved spec after a successful "Save to folder", so the
+   *  parent can reflect it immediately (e.g. the "✓ saved" badge). */
+  onSaved?: (spec: ThumbnailSpec) => void;
 }
 
 function clamp(v: number, min: number, max: number): number {
@@ -102,6 +105,7 @@ export default function ThumbnailEditor({
   suggestedTexts,
   saved,
   context,
+  onSaved,
 }: ThumbnailEditorProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const reqIdRef = useRef(0);
@@ -399,6 +403,7 @@ export default function ThumbnailEditor({
         spec,
       });
       setSavedPath(path);
+      onSaved?.(spec);
     } catch (e: any) {
       setError(e.message || 'Failed to save thumbnail');
     } finally {

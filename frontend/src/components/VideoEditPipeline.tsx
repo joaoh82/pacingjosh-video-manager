@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo } from 'react';
 import ThumbnailEditor from './ThumbnailEditor';
-import { Production, EditJobStatus, ProductionEdit, YoutubeCopy, Video } from '@/lib/types';
+import { Production, EditJobStatus, ProductionEdit, YoutubeCopy, ThumbnailSpec, Video } from '@/lib/types';
 import {
   startProductionEdit,
   getEditStatus,
@@ -839,6 +839,9 @@ function EditDetail({
 
   // Thumbnail builder
   const [thumbOpen, setThumbOpen] = useState(false);
+  // Held locally so the "✓ saved" badge / "Edit thumbnail" label update the
+  // moment a thumbnail is saved, without waiting for a modal reopen.
+  const [thumbnail, setThumbnail] = useState<ThumbnailSpec | null>(edit.thumbnail ?? null);
   const thumbDuration =
     edit.edl?.timeline?.duration && edit.edl.timeline.duration > 0
       ? edit.edl.timeline.duration
@@ -849,6 +852,10 @@ function EditDetail({
     setCopyErr(null);
     setCopiedKey(null);
   }, [edit.id, edit.copy]);
+
+  useEffect(() => {
+    setThumbnail(edit.thumbnail ?? null);
+  }, [edit.id, edit.thumbnail]);
 
   const toClipboard = (key: string, text: string) => {
     navigator.clipboard
@@ -1068,7 +1075,7 @@ function EditDetail({
             <div>
               <h3 className="font-semibold text-gray-900 dark:text-white">
                 Thumbnail
-                {edit.thumbnail && (
+                {thumbnail && (
                   <span className="ml-2 text-xs font-normal text-green-600 dark:text-green-400">
                     ✓ saved
                   </span>
@@ -1084,7 +1091,7 @@ function EditDetail({
               onClick={() => setThumbOpen((o) => !o)}
               className="btn btn-secondary text-sm whitespace-nowrap"
             >
-              {thumbOpen ? 'Close' : edit.thumbnail ? 'Edit thumbnail' : 'Make thumbnail'}
+              {thumbOpen ? 'Close' : thumbnail ? 'Edit thumbnail' : 'Make thumbnail'}
             </button>
           </div>
           {thumbOpen && (
@@ -1092,8 +1099,9 @@ function EditDetail({
               editId={edit.id}
               duration={thumbDuration}
               suggestedTexts={copy?.thumbnail_texts ?? []}
-              saved={edit.thumbnail ?? null}
+              saved={thumbnail}
               context={copy?.titles?.[0] ?? edit.script?.slice(0, 200) ?? ''}
+              onSaved={setThumbnail}
             />
           )}
         </div>
