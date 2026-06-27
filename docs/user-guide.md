@@ -228,6 +228,12 @@ overlays are pre‑filled so they stay put. The read‑only **Overlays** track a
 shows where each one landed on the last render. Re‑render to apply — each overlay
 is dropped into the longest pause where you're not talking.
 
+As you scrub or play the preview player, a **live placement preview** shows each
+overlay composited over the video at the spot it will land — so you can check
+position, size, and timing before re‑rendering. Toggle it with the **Overlay
+preview** checkbox in the top‑right of the player. (It's a placement aid; the
+final, baked‑in result still comes from the re‑render.)
+
 ### Music: remove or fade
 
 Click a green **music "burst"** (a stretch where music plays at full level) to

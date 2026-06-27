@@ -495,6 +495,11 @@ export function getEditVideoUrl(editId: number): string {
   return apiUrl(`/api/edits/${editId}/video`);
 }
 
+/** URL that serves an overlay image/GIF file, for the live placement preview. */
+export function getOverlayPreviewUrl(path: string): string {
+  return apiUrl(`/api/overlays/preview?path=${encodeURIComponent(path)}`);
+}
+
 // --- Thumbnail builder ---
 
 /** Grab a 1280x720 still frame from a run's final video at `t` seconds. */

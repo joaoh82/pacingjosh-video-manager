@@ -111,6 +111,40 @@ async fn builtin_overlays(config: web::Data<ConfigManager>) -> HttpResponse {
     HttpResponse::Ok().json(overlays)
 }
 
+#[derive(Deserialize)]
+pub struct OverlayPreviewQuery {
+    /// Absolute path to the overlay image/GIF to serve.
+    pub path: String,
+}
+
+/// Serve an overlay image/GIF file so the timeline editor can show a live
+/// placement preview over the player before re-rendering. Restricted to image
+/// extensions (the snippet is a GIF/PNG/…), so it can't be used to read
+/// arbitrary non-image files. Local single-user app.
+#[get("/overlays/preview")]
+async fn overlay_preview(query: web::Query<OverlayPreviewQuery>, req: HttpRequest) -> HttpResponse {
+    let p = std::path::PathBuf::from(&query.path);
+    let ext = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_lowercase())
+        .unwrap_or_default();
+    let allowed = matches!(ext.as_str(), "gif" | "png" | "jpg" | "jpeg" | "webp" | "bmp");
+    if !allowed {
+        return HttpResponse::BadRequest()
+            .json(serde_json::json!({ "detail": "Overlay preview only serves image/GIF files." }));
+    }
+    if !p.is_file() {
+        return HttpResponse::NotFound()
+            .json(serde_json::json!({ "detail": "Overlay file not found." }));
+    }
+    match NamedFile::open_async(&p).await {
+        Ok(file) => file.use_last_modified(true).into_response(&req),
+        Err(e) => HttpResponse::NotFound()
+            .json(serde_json::json!({ "detail": format!("Could not open overlay: {}", e) })),
+    }
+}
+
 /// Kick off the edit pipeline for a production. Returns a job id to poll.
 #[post("/productions/{production_id}/edit")]
 async fn start_edit(
@@ -802,6 +836,7 @@ fn reveal_in_explorer(path: &str, select: bool) -> Result<(), String> {
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(start_edit)
         .service(builtin_overlays)
+        .service(overlay_preview)
         .service(edit_status)
         .service(list_edits)
         .service(get_latest_edit)
