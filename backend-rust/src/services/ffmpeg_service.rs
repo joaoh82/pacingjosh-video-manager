@@ -647,6 +647,162 @@ pub fn extract_frame(video: &Path, t: f32, width: i32, height: i32) -> Result<Ve
     Ok(bytes)
 }
 
+/// One overlay snippet to composite onto the final video: which file, when it
+/// appears on the timeline, how to key out its (solid-colour) background, and
+/// where/how big to place it. Used for "Subscribe" bugs and similar bumpers.
+#[derive(Debug, Clone)]
+pub struct OverlayPlacement {
+    pub path: PathBuf,
+    /// Start time on the final timeline (seconds) where the snippet appears.
+    pub start: f32,
+    /// How long the snippet stays on screen (seconds) — usually its own length.
+    pub duration: f32,
+    /// Chroma-key colour to remove (the snippet's background) as an ffmpeg
+    /// colour, e.g. `0xFFFFFF` for white. Empty disables keying (composited
+    /// opaque).
+    pub chroma_color: String,
+    /// colorkey similarity (0..1): higher removes a wider range around the key.
+    pub similarity: f32,
+    /// colorkey blend (0..1): softens the keyed edge.
+    pub blend: f32,
+    /// Scale factor applied to the snippet (1.0 = original size).
+    pub scale: f32,
+    /// Overall opacity of the snippet (0..1).
+    pub opacity: f32,
+    /// Position preset: "center" (default), "top", "bottom", "left", "right",
+    /// "top_left", "top_right", "bottom_left", "bottom_right".
+    pub position: String,
+}
+
+/// Overlay x/y position expressions (in `overlay` filter syntax, using W/H for
+/// the base frame and w/h for the snippet) for a named preset. `margin` is the
+/// edge inset in pixels for the non-centered presets. Pure for testability.
+fn overlay_xy(position: &str, margin: i32) -> (String, String) {
+    let m = margin.max(0);
+    let cx = "(W-w)/2".to_string();
+    let cy = "(H-h)/2".to_string();
+    let left = format!("{}", m);
+    let right = format!("W-w-{}", m);
+    let top = format!("{}", m);
+    let bottom = format!("H-h-{}", m);
+    match position {
+        "top" => (cx, top),
+        "bottom" => (cx, bottom),
+        "left" => (left, cy),
+        "right" => (right, cy),
+        "top_left" => (left, top),
+        "top_right" => (right, top),
+        "bottom_left" => (left, bottom),
+        "bottom_right" => (right, bottom),
+        _ => (cx, cy),
+    }
+}
+
+/// Build the `filter_complex` graph that composites `overlays` onto the base
+/// video (input `[0:v]`; each overlay is input `[i+1:v]`). Each snippet is
+/// chroma-keyed, optionally scaled/faded, time-shifted to start at its
+/// `start`, and laid on with `enable='between(t,start,end)'` so it only shows
+/// during its window. The final node is labelled `[vout]`. Pure (no I/O) so the
+/// (fiddly) graph can be unit-tested without invoking ffmpeg.
+pub fn build_overlay_filter(overlays: &[OverlayPlacement]) -> String {
+    const MARGIN: i32 = 40;
+    let mut parts: Vec<String> = Vec::new();
+
+    // Prepare each snippet stream: key → scale → opacity → time-shift.
+    for (i, o) in overlays.iter().enumerate() {
+        let mut chain: Vec<String> = Vec::new();
+        let color = o.chroma_color.trim();
+        if !color.is_empty() {
+            let sim = o.similarity.clamp(0.0, 1.0);
+            let blend = o.blend.clamp(0.0, 1.0);
+            chain.push(format!("colorkey={}:{:.3}:{:.3}", color, sim, blend));
+        }
+        chain.push("format=rgba".to_string());
+        let scale = o.scale.clamp(0.05, 4.0);
+        if (scale - 1.0).abs() > 1e-3 {
+            chain.push(format!("scale=iw*{s:.4}:ih*{s:.4}", s = scale));
+        }
+        let opacity = o.opacity.clamp(0.0, 1.0);
+        if opacity < 0.999 {
+            chain.push(format!("colorchannelmixer=aa={:.3}", opacity));
+        }
+        let start = o.start.max(0.0);
+        chain.push(format!("setpts=PTS-STARTPTS+{:.3}/TB", start));
+        parts.push(format!("[{}:v]{}[ov{}]", i + 1, chain.join(","), i));
+    }
+
+    // Lay each prepared snippet onto the running base, in order.
+    let mut last = "[0:v]".to_string();
+    for (i, o) in overlays.iter().enumerate() {
+        let (x, y) = overlay_xy(&o.position, MARGIN);
+        let start = o.start.max(0.0);
+        let end = start + o.duration.max(0.05);
+        let out = if i + 1 == overlays.len() {
+            "[vout]".to_string()
+        } else {
+            format!("[base{}]", i)
+        };
+        parts.push(format!(
+            "{}[ov{}]overlay=x={}:y={}:enable='between(t,{:.3},{:.3})':eof_action=pass{}",
+            last, i, x, y, start, end, out
+        ));
+        last = out;
+    }
+
+    parts.join(";")
+}
+
+/// Composite one or more overlay snippets onto `base`, writing `out_path`. The
+/// video is re-encoded (overlays require a pixel pass); the base audio is copied
+/// untouched. Snippet audio is dropped — these are visual bumpers. Returns an
+/// error (with ffmpeg stderr) on failure.
+pub fn composite_overlays(
+    base: &Path,
+    overlays: &[OverlayPlacement],
+    out_path: &Path,
+) -> Result<(), String> {
+    if overlays.is_empty() {
+        return Err("No overlays to composite".to_string());
+    }
+    if let Some(parent) = out_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    let filter = build_overlay_filter(overlays);
+
+    let mut cmd = ffmpeg_cmd();
+    cmd.arg("-i").arg(base);
+    for o in overlays {
+        cmd.arg("-i").arg(&o.path);
+    }
+    let output = cmd
+        .args(["-filter_complex", &filter])
+        .args(["-map", "[vout]", "-map", "0:a?"])
+        .args([
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-crf", "20",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "copy",
+            "-movflags", "+faststart",
+            "-y",
+        ])
+        .arg(out_path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .map_err(|e| format!("Failed to run ffmpeg: {}", e))?;
+
+    if output.status.success() && out_path.exists() {
+        Ok(())
+    } else {
+        Err(format!(
+            "ffmpeg failed to composite overlays: {}",
+            stderr_tail(&output.stderr)
+        ))
+    }
+}
+
 /// Return the last ~600 chars of captured stderr, for surfacing ffmpeg errors.
 fn stderr_tail(stderr: &[u8]) -> String {
     let s = String::from_utf8_lossy(stderr);
@@ -694,5 +850,57 @@ mod tests {
         // duck above full is clamped down to full (no louder-while-talking).
         let e = music_volume_expr(0.2, 0.9, &[(0.0, 1.0)], &[]);
         assert!(e.contains(",0.2000,"));
+    }
+
+    fn overlay(start: f32, dur: f32) -> OverlayPlacement {
+        OverlayPlacement {
+            path: PathBuf::from("sub.mp4"),
+            start,
+            duration: dur,
+            chroma_color: "0xFFFFFF".to_string(),
+            similarity: 0.1,
+            blend: 0.05,
+            scale: 1.0,
+            opacity: 1.0,
+            position: "center".to_string(),
+        }
+    }
+
+    #[test]
+    fn overlay_filter_keys_shifts_and_gates_a_single_overlay() {
+        let f = build_overlay_filter(&[overlay(3.0, 5.0)]);
+        // White is keyed out, the snippet is time-shifted to its start, and it's
+        // only enabled during its window, ending at start+duration.
+        assert!(f.contains("colorkey=0xFFFFFF:0.100:0.050"));
+        assert!(f.contains("setpts=PTS-STARTPTS+3.000/TB"));
+        assert!(f.contains("enable='between(t,3.000,8.000)'"));
+        assert!(f.contains("eof_action=pass"));
+        assert!(f.ends_with("[vout]"));
+        // A single overlay composites straight onto the base video.
+        assert!(f.contains("[0:v][ov0]overlay="));
+    }
+
+    #[test]
+    fn overlay_filter_chains_multiple_overlays() {
+        let f = build_overlay_filter(&[overlay(1.0, 2.0), overlay(5.0, 2.0)]);
+        // First overlay writes an intermediate node that the second consumes.
+        assert!(f.contains("[base0]"));
+        assert!(f.contains("[base0][ov1]overlay="));
+        assert!(f.ends_with("[vout]"));
+    }
+
+    #[test]
+    fn overlay_filter_skips_key_when_color_empty() {
+        let mut o = overlay(0.0, 2.0);
+        o.chroma_color = "".to_string();
+        let f = build_overlay_filter(&[o]);
+        assert!(!f.contains("colorkey"));
+    }
+
+    #[test]
+    fn overlay_xy_presets() {
+        assert_eq!(overlay_xy("center", 40), ("(W-w)/2".to_string(), "(H-h)/2".to_string()));
+        assert_eq!(overlay_xy("bottom_right", 40), ("W-w-40".to_string(), "H-h-40".to_string()));
+        assert_eq!(overlay_xy("top", 40).1, "40".to_string());
     }
 }

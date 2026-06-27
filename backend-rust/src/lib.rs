@@ -85,6 +85,12 @@ pub async fn run(paths: BackendPaths) -> std::io::Result<()> {
     // Ensure thumbnail directory exists (matches Python init_db behavior)
     config_manager.get_thumbnail_directory();
 
+    // Write out the bundled overlay snippets (e.g. the "Subscribe" bug) so they
+    // are available on disk for the edit pipeline to composite.
+    if let Err(e) = services::overlay_service::ensure_builtin_overlays(&paths.app_data_dir) {
+        log::warn!("Could not write built-in overlays: {}", e);
+    }
+
     // Scan progress map
     let scan_map: ScanMap = Arc::new(Mutex::new(HashMap::new()));
 

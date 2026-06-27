@@ -140,6 +140,13 @@ assembles a finished cut for you. It needs AI keys configured under
      with **two levels**: a volume for pauses and a lower one for while you talk.
      A "bring music back only after pauses longer than N seconds" control keeps
      short thinking pauses ducked so the music doesn't pop in mid‑sentence.
+   - **Overlays** (optional) — **🔔 Add Subscribe** drops in the built‑in
+     subscribe‑button snippet; **➕ Add overlay…** lets you pick any video of your
+     own (a Like reminder, a logo sting, etc.). Each overlay is auto‑placed in the
+     **longest pause where you're not talking** and its solid background is keyed
+     out so it floats over your footage. Per overlay you can toggle **Remove
+     background**, pick a **Position**, and set the **Size**. Placement re‑flows
+     automatically each time you re‑render.
 5. Click **Run pipeline**.
 
 ### What happens
@@ -153,6 +160,8 @@ The pipeline runs in stages with live progress and an activity log:
 3. Write the **edit decision list** (per‑clip `video_id` + time ranges) to JSON.
 4. **Cut** each clip (burning in captions / enhancing voice as configured).
 5. **Stitch** the final video with FFmpeg, mixing in ducked music if provided.
+6. **Overlays** — composite any overlay snippets into the pauses, with their
+   backgrounds keyed out.
 
 When it finishes you get a per‑clip breakdown, the interactive timeline (below),
 and a **Reveal final video** button.
@@ -208,6 +217,16 @@ re‑transcription, no re‑planning).
 Select a clip and toggle **✨ Enhance voice** in the inspector (🎙 marks clips
 already enhanced). This applies the same noise‑removal cleanup as the pre‑render
 option, only to that clip.
+
+### Overlays: add a Subscribe bug after the fact
+
+Under the timeline, the **Overlays** controls let you add or change overlay
+snippets on a run you've already edited — no need to start a new edit. Click
+**🔔 Add Subscribe** for the built‑in snippet or **➕ Add overlay…** to pick your
+own; toggle **Remove bg**, pick a **Pos**(ition), and set the **Size** per
+overlay. Existing overlays are pre‑filled so they stay put. The read‑only
+**Overlays** track above shows where each one landed on the last render. Re‑render
+to apply — each overlay is dropped into the longest pause where you're not talking.
 
 ### Music: remove or fade
 

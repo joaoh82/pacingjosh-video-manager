@@ -185,6 +185,28 @@ export interface TimelineMusic {
   duck_volume: number;
 }
 
+/** An overlay snippet placed on the final timeline (e.g. a Subscribe bug).
+ * Carries the display fields plus the full spec so the timeline editor can
+ * rehydrate and re-send it on a re-render. */
+export interface TimelineOverlay {
+  label?: string | null;
+  filename?: string | null;
+  /** Absolute path to the snippet file (used to re-send on re-render). */
+  path?: string;
+  /** Where the snippet appears on the final timeline (seconds). */
+  start: number;
+  /** When it ends (start + duration). */
+  end: number;
+  duration: number;
+  position: string;
+  /** Background colour keyed out ("" → none). */
+  chroma_color?: string;
+  similarity?: number;
+  blend?: number;
+  scale?: number;
+  opacity?: number;
+}
+
 /** Editor-style timeline: clips laid end-to-end, speech intervals, music. */
 export interface EditTimeline {
   duration: number;
@@ -196,6 +218,8 @@ export interface EditTimeline {
   muted?: TimelineSpeech[];
   /** Intervals where the music fades in/out (applied on the saved run). */
   fades?: TimelineSpeech[];
+  /** Overlay snippets dropped into the pauses (read-only on the timeline). */
+  overlays?: TimelineOverlay[];
   music: TimelineMusic;
 }
 
@@ -346,4 +370,37 @@ export interface StartEditPayload {
   enhance_voice?: number[];
   /** Voice-enhancement intensity, 0.0–1.0 (how aggressively to remove noise). */
   enhance_voice_intensity?: number;
+  /** Overlay snippets (e.g. a "Subscribe" bug) to drop into the pauses. */
+  overlays?: OverlaySpecPayload[];
+}
+
+/** One overlay snippet to composite onto the final video (sent on start-edit).
+ * By default it's auto-placed in the longest pause where no one is talking. */
+export interface OverlaySpecPayload {
+  /** Path to the overlay video file. */
+  path: string;
+  /** Display label (e.g. "Subscribe"). */
+  label?: string;
+  /** Background colour to chroma-key out (e.g. "0xFFFFFF"). "" disables keying. */
+  chroma_color?: string;
+  /** colorkey similarity (0..1). */
+  similarity?: number;
+  /** colorkey blend (0..1). */
+  blend?: number;
+  /** Scale factor (1.0 = original size). */
+  scale?: number;
+  /** Opacity (0..1). */
+  opacity?: number;
+  /** Position preset ("center", "bottom", "bottom_right", …). */
+  position?: string;
+  /** Explicit start time on the final timeline (seconds); omit to auto-place. */
+  start?: number;
+}
+
+/** A built-in overlay snippet offered by the backend (e.g. the Subscribe bug). */
+export interface BuiltinOverlay {
+  id: string;
+  label: string;
+  path: string;
+  chroma_color: string;
 }

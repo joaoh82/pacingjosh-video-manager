@@ -18,6 +18,7 @@ import {
   generateEditCopy,
   browseFolder,
   browseFile,
+  getBuiltinOverlays,
 } from '@/lib/api';
 
 /** Recover the chosen output root from a previous run's output path. Outputs are
@@ -40,12 +41,44 @@ interface VideoEditPipelineProps {
   onClose: () => void;
 }
 
+/** An overlay snippet the creator added to a run (UI state). It's auto-placed
+ * in the longest pause where no one is talking. */
+interface OverlayItem {
+  path: string;
+  label: string;
+  /** Remove the snippet's solid background (chroma key). */
+  removeBg: boolean;
+  /** Background colour to key out when `removeBg` is on (e.g. "0xFFFFFF"). */
+  baseColor: string;
+  /** Scale factor (1.0 = original size). */
+  scale: number;
+  /** Position preset. */
+  position: string;
+}
+
+const OVERLAY_POSITIONS: { value: string; label: string }[] = [
+  { value: 'center', label: 'Center' },
+  { value: 'bottom', label: 'Bottom' },
+  { value: 'top', label: 'Top' },
+  { value: 'bottom_right', label: 'Bottom right' },
+  { value: 'bottom_left', label: 'Bottom left' },
+  { value: 'top_right', label: 'Top right' },
+  { value: 'top_left', label: 'Top left' },
+];
+
+/** Derive a short label from a file path (filename without extension). */
+function labelFromPath(p: string): string {
+  const base = p.replace(/\\/g, '/').split('/').pop() || p;
+  return base.replace(/\.[^.]+$/, '');
+}
+
 const STAGE_LABELS: Record<string, string> = {
   starting: 'Starting',
   transcribing: 'Transcribing takes',
   planning: 'Planning the edit',
   stitching: 'Stitching the final video',
   mixing: 'Adding background music',
+  overlays: 'Adding overlays',
   completed: 'Completed',
   failed: 'Failed',
 };
@@ -88,6 +121,10 @@ export default function VideoEditPipeline({
   const [musicVolume, setMusicVolume] = useState(0.3);
   const [musicDuckVolume, setMusicDuckVolume] = useState(0.08);
   const [musicMinGap, setMusicMinGap] = useState(1.5);
+
+  // Overlay snippets (e.g. a Subscribe bug) auto-dropped into the pauses.
+  const [overlays, setOverlays] = useState<OverlayItem[]>([]);
+  const [addingOverlay, setAddingOverlay] = useState(false);
 
   // Enhance voice (per-take noise removal) + intensity
   const [takes, setTakes] = useState<Video[]>([]);
@@ -236,6 +273,13 @@ export default function VideoEditPipeline({
         music_min_gap: musicMinGap,
         enhance_voice: enhanceIds,
         enhance_voice_intensity: enhanceIntensity,
+        overlays: overlays.map((o) => ({
+          path: o.path,
+          label: o.label || undefined,
+          chroma_color: o.removeBg ? o.baseColor : '',
+          scale: o.scale,
+          position: o.position,
+        })),
       });
       setJobId(res.job_id);
     } catch (e: any) {
@@ -262,6 +306,56 @@ export default function VideoEditPipeline({
       /* ignore */
     }
   };
+
+  const addOverlay = (item: OverlayItem) => setOverlays((o) => [...o, item]);
+
+  const handleAddSubscribe = async () => {
+    setAddingOverlay(true);
+    setError(null);
+    try {
+      const builtins = await getBuiltinOverlays();
+      const sub = builtins.find((b) => b.id === 'subscribe') || builtins[0];
+      if (!sub) {
+        setError('No built-in overlay is available.');
+        return;
+      }
+      addOverlay({
+        path: sub.path,
+        label: sub.label,
+        removeBg: true,
+        baseColor: sub.chroma_color || '0xFFFFFF',
+        scale: 1.0,
+        position: 'center',
+      });
+    } catch (e: any) {
+      setError(e.message || 'Could not load the built-in Subscribe overlay.');
+    } finally {
+      setAddingOverlay(false);
+    }
+  };
+
+  const handleAddCustomOverlay = async () => {
+    try {
+      const r = await browseFile();
+      if (r.success && r.path) {
+        addOverlay({
+          path: r.path,
+          label: labelFromPath(r.path),
+          removeBg: true,
+          baseColor: '0xFFFFFF',
+          scale: 1.0,
+          position: 'center',
+        });
+      }
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const updateOverlay = (idx: number, patch: Partial<OverlayItem>) =>
+    setOverlays((list) => list.map((o, i) => (i === idx ? { ...o, ...patch } : o)));
+  const removeOverlay = (idx: number) =>
+    setOverlays((list) => list.filter((_, i) => i !== idx));
 
   const toggleEnhance = (id: number) =>
     setEnhanceIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
@@ -781,6 +875,113 @@ export default function VideoEditPipeline({
                           while you&apos;re speaking. Short thinking pauses (under the value above) stay
                           ducked so the music doesn&apos;t pop in mid-sentence.
                         </p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Overlays (Subscribe bug, bumpers) */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                      Overlays (optional)
+                    </label>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+                      Drop a snippet (like a Subscribe button) on top of the video. Each one is
+                      placed automatically in the longest pause where you&apos;re not talking, with
+                      its background removed.
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={handleAddSubscribe}
+                        disabled={running || addingOverlay}
+                        className="btn btn-secondary text-sm whitespace-nowrap"
+                      >
+                        🔔 Add Subscribe
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleAddCustomOverlay}
+                        disabled={running}
+                        className="btn btn-secondary text-sm whitespace-nowrap"
+                      >
+                        ➕ Add overlay…
+                      </button>
+                    </div>
+
+                    {overlays.length > 0 && (
+                      <div className="mt-3 space-y-2">
+                        {overlays.map((o, idx) => (
+                          <div
+                            key={idx}
+                            className="rounded-md border border-gray-200 dark:border-gray-700 p-3 space-y-2"
+                          >
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="text"
+                                value={o.label}
+                                onChange={(e) => updateOverlay(idx, { label: e.target.value })}
+                                disabled={running}
+                                className="input flex-1 text-sm py-1"
+                                placeholder="Overlay name"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => removeOverlay(idx)}
+                                disabled={running}
+                                className="text-xs text-gray-500 hover:text-red-600 dark:text-gray-400"
+                              >
+                                remove
+                              </button>
+                            </div>
+                            <div
+                              className="text-xs text-gray-400 dark:text-gray-500 truncate"
+                              title={o.path}
+                            >
+                              {o.path}
+                            </div>
+                            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                              <label className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300">
+                                <input
+                                  type="checkbox"
+                                  checked={o.removeBg}
+                                  onChange={(e) => updateOverlay(idx, { removeBg: e.target.checked })}
+                                  disabled={running}
+                                />
+                                Remove background
+                              </label>
+                              <label className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300">
+                                Position
+                                <select
+                                  value={o.position}
+                                  onChange={(e) => updateOverlay(idx, { position: e.target.value })}
+                                  disabled={running}
+                                  className="input text-sm py-1"
+                                >
+                                  {OVERLAY_POSITIONS.map((p) => (
+                                    <option key={p.value} value={p.value}>
+                                      {p.label}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                              <label className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300">
+                                Size {Math.round(o.scale * 100)}%
+                                <input
+                                  type="range"
+                                  min={0.2}
+                                  max={1}
+                                  step={0.05}
+                                  value={o.scale}
+                                  onChange={(e) =>
+                                    updateOverlay(idx, { scale: parseFloat(e.target.value) })
+                                  }
+                                  disabled={running}
+                                  className="w-28"
+                                />
+                              </label>
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     )}
                   </div>
