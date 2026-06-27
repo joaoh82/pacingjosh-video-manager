@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ReactNode } from 'react';
+import type { ReactNode, CSSProperties } from 'react';
 import {
   EditTimeline as Timeline,
   TimelineSpeech,
@@ -11,7 +11,83 @@ import {
   TimelineAiPlan,
   OverlaySpecPayload,
 } from '@/lib/types';
-import { getThumbnailUrl, aiEditTimeline, getBuiltinOverlays, browseImage } from '@/lib/api';
+import {
+  getThumbnailUrl,
+  aiEditTimeline,
+  getBuiltinOverlays,
+  browseImage,
+  getOverlayPreviewUrl,
+} from '@/lib/api';
+
+/** Default on-screen seconds for an overlay whose length we don't know yet
+ * (mirrors the backend default for still images). */
+const OVERLAY_PREVIEW_FALLBACK_SECS = 5;
+
+/** Non-speech gaps within [0, total] — the complement of `speech`. Mirrors the
+ * backend's `non_speech_regions` so the live preview lands overlays where the
+ * pipeline will. */
+function nonSpeechGaps(
+  speech: { start: number; end: number }[],
+  total: number
+): { start: number; end: number }[] {
+  const merged = [...speech]
+    .filter((s) => s.end > s.start)
+    .sort((a, b) => a.start - b.start);
+  const out: { start: number; end: number }[] = [];
+  let cursor = 0;
+  for (const s of merged) {
+    if (s.start > cursor) out.push({ start: cursor, end: s.start });
+    cursor = Math.max(cursor, s.end);
+  }
+  if (cursor < total) out.push({ start: cursor, end: total });
+  return out.filter((g) => g.end - g.start > 0.05);
+}
+
+/** Start time for each overlay (by display duration), longest gaps first,
+ * centered when it fits. Mirrors the backend `auto_overlay_starts`. */
+function autoOverlayStarts(
+  gaps: { start: number; end: number }[],
+  durations: number[]
+): number[] {
+  const ranked = [...gaps]
+    .filter((g) => g.end > g.start)
+    .sort((a, b) => b.end - b.start - (a.end - a.start));
+  return durations.map((dur, i) => {
+    if (!ranked.length) return 0;
+    const g = ranked[i % ranked.length];
+    const gapLen = g.end - g.start;
+    return Math.max(0, dur < gapLen ? g.start + (gapLen - dur) / 2 : g.start);
+  });
+}
+
+/** CSS for an overlay <img> in the live preview layer: width as a fraction of
+ * the frame, positioned by the same presets the backend uses. ~3% edge margin
+ * roughly matches the renderer's 40px-on-1920 inset. */
+function overlayPreviewStyle(position: string, scale: number): CSSProperties {
+  const width = `${Math.max(5, Math.min(100, scale * 100))}%`;
+  const M = '3%';
+  const base: CSSProperties = { width, height: 'auto' };
+  switch (position) {
+    case 'top':
+      return { ...base, top: M, left: '50%', transform: 'translateX(-50%)' };
+    case 'bottom':
+      return { ...base, bottom: M, left: '50%', transform: 'translateX(-50%)' };
+    case 'left':
+      return { ...base, left: M, top: '50%', transform: 'translateY(-50%)' };
+    case 'right':
+      return { ...base, right: M, top: '50%', transform: 'translateY(-50%)' };
+    case 'top_left':
+      return { ...base, top: M, left: M };
+    case 'top_right':
+      return { ...base, top: M, right: M };
+    case 'bottom_left':
+      return { ...base, bottom: M, left: M };
+    case 'bottom_right':
+      return { ...base, bottom: M, right: M };
+    default: // center
+      return { ...base, top: '50%', left: '50%', transform: 'translate(-50%, -50%)' };
+  }
+}
 
 /** An overlay snippet (transparent GIF/image) being edited on the timeline
  * (re-render UI state). */
@@ -167,6 +243,8 @@ export default function EditTimeline({
   const [overlayError, setOverlayError] = useState<string | null>(null);
   // JSON snapshot of the seeded overlays, to detect genuine changes.
   const overlaySeedRef = useRef<string>('[]');
+  // Show a live placement preview of overlays over the player (before re-render).
+  const [showOverlayPreview, setShowOverlayPreview] = useState(true);
 
   // Playback position (seconds, original render) mirrored by the playhead.
   const [currentTime, setCurrentTime] = useState(0);
@@ -325,6 +403,41 @@ export default function EditTimeline({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [timeline, laid]
   );
+
+  // Live placement of the (pending) overlays on the EDITED timeline, mirroring
+  // the backend's auto-placement, so the preview shows where each snippet will
+  // land before a re-render. Duration is the snippet's saved length when known
+  // (matched by path), else a default.
+  const livePlacements = useMemo(() => {
+    if (!overlayItems.length) return [] as {
+      item: OverlayItem;
+      start: number;
+      end: number;
+    }[];
+    const durByPath = new Map<string, number>();
+    for (const o of timeline.overlays ?? []) {
+      if (o.path && o.duration) durByPath.set(o.path, o.duration);
+    }
+    const durations = overlayItems.map(
+      (o) => durByPath.get(o.path) ?? OVERLAY_PREVIEW_FALLBACK_SECS
+    );
+    const gaps = nonSpeechGaps(editedSpeech, dur);
+    const starts = autoOverlayStarts(gaps, durations);
+    return overlayItems.map((item, i) => ({
+      item,
+      start: starts[i] ?? 0,
+      end: (starts[i] ?? 0) + durations[i],
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [overlayItems, editedSpeech, dur, timeline]);
+
+  // Which overlays are visible at the current playhead position.
+  const activeOverlays = useMemo(() => {
+    if (!showOverlayPreview) return [];
+    const t = remapPoint(currentTime);
+    return livePlacements.filter((p) => t >= p.start && t <= p.end);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showOverlayPreview, livePlacements, currentTime]);
 
   // Map a time on the ORIGINAL render onto the edited timeline (for the playhead).
   const remapPoint = (tOld: number): number => {
@@ -774,16 +887,45 @@ export default function EditTimeline({
 
   return (
     <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-2 bg-gray-50 dark:bg-gray-900/40">
-      {/* Preview player — its position drives the timeline playhead */}
+      {/* Preview player — its position drives the timeline playhead. The overlay
+          layer shows a live placement preview of the (pending) overlays. */}
       {videoSrc && (
-        <video
-          key={videoSrc}
-          ref={videoRef}
-          src={videoSrc}
-          controls
-          preload="metadata"
-          className="w-full max-h-[360px] bg-black rounded mb-2"
-        />
+        <div className="relative w-fit max-w-full mx-auto mb-2">
+          <video
+            key={videoSrc}
+            ref={videoRef}
+            src={videoSrc}
+            controls
+            preload="metadata"
+            className="block w-full max-h-[360px] bg-black rounded"
+          />
+          {activeOverlays.length > 0 && (
+            <div className="absolute inset-0 pointer-events-none overflow-hidden rounded">
+              {activeOverlays.map((p) => (
+                <img
+                  key={`${p.item.path}-${p.start}`}
+                  src={getOverlayPreviewUrl(p.item.path)}
+                  alt=""
+                  className="absolute"
+                  style={overlayPreviewStyle(p.item.position, p.item.scale)}
+                />
+              ))}
+            </div>
+          )}
+          {overlayItems.length > 0 && (
+            <label
+              className="absolute top-1 right-1 flex items-center gap-1 text-[10px] text-white bg-black/55 rounded px-1.5 py-0.5 cursor-pointer select-none"
+              title="Show a live placement preview of overlays over the player (the final look comes from re-rendering)"
+            >
+              <input
+                type="checkbox"
+                checked={showOverlayPreview}
+                onChange={(e) => setShowOverlayPreview(e.target.checked)}
+              />
+              Overlay preview
+            </label>
+          )}
+        </div>
       )}
 
       {/* Toolbar */}
