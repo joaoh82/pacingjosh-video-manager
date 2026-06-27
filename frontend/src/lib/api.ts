@@ -14,6 +14,8 @@ import type {
   TimelineAiPlan,
   ThumbnailSpec,
   ThumbnailTextStyle,
+  BuiltinOverlay,
+  OverlaySpecPayload,
 } from './types';
 
 declare global {
@@ -133,9 +135,15 @@ export async function browseFolder(): Promise<BrowseFolderResponse> {
   return fetchApi<BrowseFolderResponse>('/api/browse-folder');
 }
 
-/** Open an OS file picker (used for choosing a background-music track). */
+/** Open an OS file picker (used for choosing a background-music track or an
+ * overlay snippet). */
 export async function browseFile(): Promise<BrowseFolderResponse> {
   return fetchApi<BrowseFolderResponse>('/api/browse-file');
+}
+
+/** List the built-in overlay snippets (e.g. the "Subscribe" bug). */
+export async function getBuiltinOverlays(): Promise<BuiltinOverlay[]> {
+  return fetchApi<BuiltinOverlay[]>('/api/overlays/builtin');
 }
 
 // --- Videos ---
@@ -429,6 +437,8 @@ export async function rerenderEdit(
     clips?: ClipEdit[];
     mute?: { start: number; end: number }[];
     fade?: { start: number; end: number }[];
+    /** Overlays to use on this re-render. Omit to keep the saved ones. */
+    overlays?: OverlaySpecPayload[];
   }
 ): Promise<StartEditResponse> {
   return fetchApi<StartEditResponse>(`/api/edits/${editId}/rerender`, {
@@ -437,6 +447,8 @@ export async function rerenderEdit(
       clips: edits.clips ?? [],
       mute: edits.mute ?? [],
       fade: edits.fade ?? [],
+      // Only send overlays when provided so older runs keep their saved set.
+      ...(edits.overlays ? { overlays: edits.overlays } : {}),
     }),
   });
 }

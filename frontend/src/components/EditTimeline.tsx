@@ -9,8 +9,45 @@ import {
   ClipEdit,
   MusicEdit,
   TimelineAiPlan,
+  OverlaySpecPayload,
 } from '@/lib/types';
-import { getThumbnailUrl, aiEditTimeline } from '@/lib/api';
+import { getThumbnailUrl, aiEditTimeline, getBuiltinOverlays, browseFile } from '@/lib/api';
+
+/** An overlay snippet being edited on the timeline (re-render UI state). */
+interface OverlayItem {
+  path: string;
+  label: string;
+  removeBg: boolean;
+  baseColor: string;
+  scale: number;
+  position: string;
+}
+
+const OVERLAY_POSITIONS: { value: string; label: string }[] = [
+  { value: 'center', label: 'Center' },
+  { value: 'bottom', label: 'Bottom' },
+  { value: 'top', label: 'Top' },
+  { value: 'bottom_right', label: 'Bottom right' },
+  { value: 'bottom_left', label: 'Bottom left' },
+  { value: 'top_right', label: 'Top right' },
+  { value: 'top_left', label: 'Top left' },
+];
+
+function overlayLabelFromPath(p: string): string {
+  const base = p.replace(/\\/g, '/').split('/').pop() || p;
+  return base.replace(/\.[^.]+$/, '');
+}
+
+/** Map an overlay editor item to the re-render payload (auto-placed, no start). */
+function overlayItemToPayload(o: OverlayItem): OverlaySpecPayload {
+  return {
+    path: o.path,
+    label: o.label || undefined,
+    chroma_color: o.removeBg ? o.baseColor : '',
+    scale: o.scale,
+    position: o.position,
+  };
+}
 
 function fmtTime(s: number): string {
   const m = Math.floor(s / 60);
@@ -68,6 +105,8 @@ export interface TimelineEdits {
   mute: { start: number; end: number }[];
   /** Music regions (seconds) to fade in/out. */
   fade: { start: number; end: number }[];
+  /** Overlays to use on the re-render (omitted → keep the run's saved set). */
+  overlays?: OverlaySpecPayload[];
 }
 
 /** A clip placed on the (edit-adjusted) timeline, with resolved geometry. */
@@ -117,6 +156,14 @@ export default function EditTimeline({
   // so we can tell genuine new edits from the sticky baseline.
   const seedRef = useRef<Record<string, 'remove' | 'fade'>>({});
   const [selected, setSelected] = useState<number[]>([]);
+
+  // Overlay snippets for the re-render, seeded from the run's saved overlays so
+  // they stay sticky and can be added to / changed / removed.
+  const [overlayItems, setOverlayItems] = useState<OverlayItem[]>([]);
+  const [addingOverlay, setAddingOverlay] = useState(false);
+  const [overlayError, setOverlayError] = useState<string | null>(null);
+  // JSON snapshot of the seeded overlays, to detect genuine changes.
+  const overlaySeedRef = useRef<string>('[]');
 
   // Playback position (seconds, original render) mirrored by the playhead.
   const [currentTime, setCurrentTime] = useState(0);
@@ -169,6 +216,22 @@ export default function EditTimeline({
     }
     seedRef.current = seed;
     setMusicActions(seed);
+
+    // Seed the overlay editor from the run's saved overlays (those that carry a
+    // path can be re-sent). Missing path → display-only, skipped from the editor.
+    const seededOverlays: OverlayItem[] = (timeline.overlays ?? [])
+      .filter((o) => !!o.path)
+      .map((o) => ({
+        path: o.path as string,
+        label: o.label || o.filename || overlayLabelFromPath(o.path as string),
+        removeBg: (o.chroma_color ?? '') !== '',
+        baseColor: o.chroma_color && o.chroma_color !== '' ? o.chroma_color : '0xFFFFFF',
+        scale: o.scale ?? 1.0,
+        position: o.position || 'center',
+      }));
+    overlaySeedRef.current = JSON.stringify(seededOverlays);
+    setOverlayItems(seededOverlays);
+    setOverlayError(null);
   }, [timeline]);
 
   useEffect(() => {
@@ -187,6 +250,10 @@ export default function EditTimeline({
   const duck = Math.max(0, Math.min(full, music.duck_volume));
   const duckFrac = full > 0 ? duck / full : 0;
   const musicEditable = editable && music.present;
+
+  // Overlay snippets (e.g. a Subscribe bug) placed in the pauses. Read-only on
+  // the timeline — they're re-placed automatically on each re-render.
+  const overlays = timeline.overlays ?? [];
 
   // Committed effective source range for a clip (pending edits, not the live
   // drag — the drag is overlaid only on the dragged clip so the layout holds
@@ -365,7 +432,60 @@ export default function EditTimeline({
     setSelected([]);
     setDragPreview(null);
     setAiNote(null);
+    setOverlayItems(JSON.parse(overlaySeedRef.current)); // back to saved overlays
+    setOverlayError(null);
   };
+
+  // --- Overlay editor (add a Subscribe bug / custom snippet on re-render) ------
+  const addOverlayItem = (item: OverlayItem) => setOverlayItems((o) => [...o, item]);
+
+  const handleAddSubscribe = async () => {
+    setAddingOverlay(true);
+    setOverlayError(null);
+    try {
+      const builtins = await getBuiltinOverlays();
+      const sub = builtins.find((b) => b.id === 'subscribe') || builtins[0];
+      if (!sub) {
+        setOverlayError('No built-in overlay is available.');
+        return;
+      }
+      addOverlayItem({
+        path: sub.path,
+        label: sub.label,
+        removeBg: true,
+        baseColor: sub.chroma_color || '0xFFFFFF',
+        scale: 1.0,
+        position: 'center',
+      });
+    } catch (e: any) {
+      setOverlayError(e?.message || 'Could not load the built-in Subscribe overlay.');
+    } finally {
+      setAddingOverlay(false);
+    }
+  };
+
+  const handleAddCustomOverlay = async () => {
+    try {
+      const r = await browseFile();
+      if (r.success && r.path) {
+        addOverlayItem({
+          path: r.path,
+          label: overlayLabelFromPath(r.path),
+          removeBg: true,
+          baseColor: '0xFFFFFF',
+          scale: 1.0,
+          position: 'center',
+        });
+      }
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const updateOverlayItem = (idx: number, patch: Partial<OverlayItem>) =>
+    setOverlayItems((list) => list.map((o, i) => (i === idx ? { ...o, ...patch } : o)));
+  const removeOverlayItem = (idx: number) =>
+    setOverlayItems((list) => list.filter((_, i) => i !== idx));
 
   const removedClips = timeline.clips.filter((c) => isRemoved(c.order));
   const selectedClips = selected.map((o) => byOrder.get(o)).filter(Boolean) as LaidClip[];
@@ -410,8 +530,17 @@ export default function EditTimeline({
       if (a === 'remove') mute.push({ start: round2(r.es), end: round2(r.ee) });
       else fade.push({ start: round2(r.es), end: round2(r.ee) });
     }
-    return { clips, mute, fade };
+    // Only send overlays when the user actually changed them; otherwise the
+    // backend keeps the run's saved set (so a clip/music-only re-render doesn't
+    // need to re-send overlays).
+    const overlays = overlaysChanged ? overlayItems.map(overlayItemToPayload) : undefined;
+    return { clips, mute, fade, overlays };
   };
+
+  const overlaysChanged = useMemo(
+    () => JSON.stringify(overlayItems) !== overlaySeedRef.current,
+    [overlayItems]
+  );
 
   const pendingEdits = buildEdits();
   const nClipEdits = pendingEdits.clips.length;
@@ -426,7 +555,7 @@ export default function EditTimeline({
     const base = Object.keys(seed);
     return cur.length !== base.length || cur.some((k) => musicActions[k] !== seed[k]);
   }, [musicActions]);
-  const hasEdits = nClipEdits > 0 || musicChanged;
+  const hasEdits = nClipEdits > 0 || musicChanged || overlaysChanged;
 
   // --- AI assistant ------------------------------------------------------------
   const applyPlan = (plan: TimelineAiPlan) => {
@@ -639,6 +768,7 @@ export default function EditTimeline({
         if (nClipEdits) parts.push(`${nClipEdits} clip${nClipEdits !== 1 ? 's' : ''}`);
         if (nMute) parts.push(`${nMute} muted`);
         if (nFade) parts.push(`${nFade} faded`);
+        if (overlaysChanged) parts.push('overlays');
         return parts.length ? `Re-render · ${parts.join(', ')}` : 'Re-render';
       })();
 
@@ -855,6 +985,7 @@ export default function EditTimeline({
         <div className="flex flex-col gap-1 flex-none w-12">
           <div style={{ height: 16 }} />
           <Label h={52}>Video</Label>
+          {overlays.length > 0 && <Label h={18}>Overlays</Label>}
           <Label h={16}>Voice</Label>
           <Label h={44}>Music</Label>
         </div>
@@ -924,9 +1055,7 @@ export default function EditTimeline({
                     className={`absolute top-0 bottom-0 overflow-hidden bg-gray-300 dark:bg-gray-700 ${
                       editable ? 'cursor-pointer' : ''
                     } ${
-                      sel
-                        ? 'ring-2 ring-inset ring-primary-500 z-10'
-                        : 'border-r border-white/70 dark:border-black/40'
+                      sel ? 'z-10' : 'border-r border-white/70 dark:border-black/40'
                     }`}
                     style={{ left, width }}
                     title={`#${c.order} ${c.filename}\nsource ${c.ss.toFixed(2)}s–${c.se.toFixed(2)}s${
@@ -970,6 +1099,12 @@ export default function EditTimeline({
                         />
                       </>
                     )}
+                    {/* Selection highlight — drawn ABOVE the thumbnail so the
+                        blue frame is visible (an inset ring would sit behind the
+                        full-bleed <img>). */}
+                    {sel && (
+                      <span className="absolute inset-0 border-2 border-primary-500 bg-primary-500/20 pointer-events-none z-30" />
+                    )}
                   </div>
                 );
               })}
@@ -979,6 +1114,28 @@ export default function EditTimeline({
                 </span>
               )}
             </div>
+
+            {/* Overlays — read-only markers for snippets dropped into the pauses */}
+            {overlays.length > 0 && (
+              <div className="relative bg-gray-200/60 dark:bg-gray-800 rounded overflow-hidden" style={{ height: 18 }}>
+                {overlays.map((o, i) => {
+                  const name = o.label || o.filename || 'overlay';
+                  const subscribe = /subscrib/i.test(name);
+                  return (
+                    <div
+                      key={i}
+                      className="absolute top-0.5 bottom-0.5 rounded-sm bg-indigo-500/80 border border-indigo-300/60 flex items-center px-1 overflow-hidden pointer-events-auto"
+                      style={{ left: X(o.start), width: Math.max(8, Wd(o.start, o.end)) }}
+                      title={`${name} · ${fmtTime(o.start)}–${fmtTime(o.end)} · ${o.position} (auto-placed in a pause; re-placed on re-render)`}
+                    >
+                      <span className="text-[9px] leading-none text-white truncate">
+                        {subscribe ? '🔔' : '▶'} {name}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
 
             {/* Voice */}
             <div className="relative bg-gray-200/60 dark:bg-gray-800 rounded" style={{ height: 16 }}>
@@ -1040,6 +1197,98 @@ export default function EditTimeline({
         </div>
       </div>
 
+      {/* Overlay editor — add a Subscribe bug / custom snippet on re-render */}
+      {editable && (
+        <div className="mt-3 pl-14">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[10px] font-medium text-gray-500 dark:text-gray-400">
+              Overlays:
+            </span>
+            <button
+              type="button"
+              onClick={handleAddSubscribe}
+              disabled={busy || addingOverlay}
+              className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300 hover:bg-indigo-200 disabled:opacity-40"
+            >
+              🔔 Add Subscribe
+            </button>
+            <button
+              type="button"
+              onClick={handleAddCustomOverlay}
+              disabled={busy}
+              className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300 hover:bg-gray-200 disabled:opacity-40"
+            >
+              ➕ Add overlay…
+            </button>
+            <span className="text-[10px] text-gray-400 dark:text-gray-500">
+              dropped into the longest pause; re-render to apply
+            </span>
+          </div>
+          {overlayError && (
+            <p className="text-[10px] text-red-600 dark:text-red-400 mt-1">{overlayError}</p>
+          )}
+          {overlayItems.length > 0 && (
+            <div className="mt-2 space-y-1.5">
+              {overlayItems.map((o, idx) => (
+                <div
+                  key={idx}
+                  className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded border border-gray-200 dark:border-gray-700 px-2 py-1.5"
+                >
+                  <span className="text-[11px] text-gray-700 dark:text-gray-200 truncate max-w-[180px]" title={o.path}>
+                    {/subscrib/i.test(o.label) ? '🔔' : '▶'} {o.label || overlayLabelFromPath(o.path)}
+                  </span>
+                  <label className="flex items-center gap-1 text-[10px] text-gray-600 dark:text-gray-300">
+                    <input
+                      type="checkbox"
+                      checked={o.removeBg}
+                      onChange={(e) => updateOverlayItem(idx, { removeBg: e.target.checked })}
+                      disabled={busy}
+                    />
+                    Remove bg
+                  </label>
+                  <label className="flex items-center gap-1 text-[10px] text-gray-600 dark:text-gray-300">
+                    Pos
+                    <select
+                      value={o.position}
+                      onChange={(e) => updateOverlayItem(idx, { position: e.target.value })}
+                      disabled={busy}
+                      className="input text-[10px] py-0.5 px-1"
+                    >
+                      {OVERLAY_POSITIONS.map((p) => (
+                        <option key={p.value} value={p.value}>
+                          {p.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="flex items-center gap-1 text-[10px] text-gray-600 dark:text-gray-300">
+                    Size {Math.round(o.scale * 100)}%
+                    <input
+                      type="range"
+                      min={0.2}
+                      max={1}
+                      step={0.05}
+                      value={o.scale}
+                      onChange={(e) => updateOverlayItem(idx, { scale: parseFloat(e.target.value) })}
+                      disabled={busy}
+                      className="w-20"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => removeOverlayItem(idx)}
+                    disabled={busy}
+                    className="text-[10px] text-gray-500 hover:text-red-600 dark:text-gray-400 ml-auto"
+                  >
+                    remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Removed clips */}
       {removedClips.length > 0 && (
         <div className="flex items-center gap-2 mt-2 flex-wrap pl-14">
@@ -1061,7 +1310,11 @@ export default function EditTimeline({
       )}
 
       <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-1 pl-14">
-        Total {fmtTime(dur)} · {laid.length} clip{laid.length !== 1 ? 's' : ''}.
+        Total {fmtTime(dur)} · {laid.length} clip{laid.length !== 1 ? 's' : ''}
+        {overlays.length > 0
+          ? ` · ${overlays.length} overlay${overlays.length !== 1 ? 's' : ''} (auto-placed in pauses)`
+          : ''}
+        .
         {videoSrc ? ' Play the preview above or click/drag the ruler to scrub.' : ''}
         {editable ? (
           <>

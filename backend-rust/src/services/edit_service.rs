@@ -187,7 +187,54 @@ pub struct EditOptions {
     /// Voice-enhancement intensity, 0.0–1.0 (how aggressively to remove noise).
     #[serde(default)]
     pub enhance_voice_intensity: f32,
+    /// Overlay snippets (e.g. a "Subscribe" bug) to composite onto the final
+    /// video in the pauses where the creator isn't talking. Empty → none.
+    #[serde(default)]
+    pub overlays: Vec<OverlaySpec>,
 }
+
+/// One overlay snippet to add to a production edit: a short video (with a solid
+/// background to key out) dropped on top of the talking footage. By default it's
+/// auto-placed in the longest pause where no one is speaking; set `start` to pin
+/// it to a specific time on the final timeline instead.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct OverlaySpec {
+    /// Path to the overlay video file.
+    pub path: String,
+    /// Optional display label (e.g. "Subscribe"), echoed into the EDL/timeline.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// Background colour to chroma-key out, as an ffmpeg colour (e.g.
+    /// `0xFFFFFF`). Empty string → no keying (composited opaque).
+    #[serde(default = "default_overlay_chroma")]
+    pub chroma_color: String,
+    /// colorkey similarity (0..1).
+    #[serde(default = "default_overlay_similarity")]
+    pub similarity: f32,
+    /// colorkey blend (0..1).
+    #[serde(default = "default_overlay_blend")]
+    pub blend: f32,
+    /// Scale factor for the snippet (1.0 = original size).
+    #[serde(default = "default_overlay_scale")]
+    pub scale: f32,
+    /// Opacity (0..1).
+    #[serde(default = "default_overlay_opacity")]
+    pub opacity: f32,
+    /// Position preset ("center", "bottom", "bottom_right", …).
+    #[serde(default = "default_overlay_position")]
+    pub position: String,
+    /// Explicit start time on the final timeline (seconds). `None` → auto-place
+    /// in the longest non-speech gap.
+    #[serde(default)]
+    pub start: Option<f32>,
+}
+
+fn default_overlay_chroma() -> String { "0xFFFFFF".to_string() }
+fn default_overlay_similarity() -> f32 { 0.10 }
+fn default_overlay_blend() -> f32 { 0.05 }
+fn default_overlay_scale() -> f32 { 1.0 }
+fn default_overlay_opacity() -> f32 { 1.0 }
+fn default_overlay_position() -> String { "center".to_string() }
 
 /// A user edit to one clip of a saved cut, applied on re-render. Identified by
 /// the clip `order` in the saved EDL. `source_start`/`source_end` (when set)
@@ -412,6 +459,10 @@ pub fn start_rerender(
     fade: Vec<(f32, f32)>,
     clip_edits: Vec<ClipEdit>,
     enhance_clips: Vec<i32>,
+    // Overlay snippets to use on this re-render. `None` keeps whatever the run
+    // was saved with; `Some` replaces them (so the timeline editor can add,
+    // change, or remove overlays without re-transcribing).
+    overlays: Option<Vec<OverlaySpec>>,
     pool: DbPool,
     ai: AiSettings,
     edit_map: EditJobMap,
@@ -423,11 +474,16 @@ pub fn start_rerender(
     let production = production_service::get_production(&mut conn, production_id)
         .ok_or_else(|| format!("Production not found: {}", production_id))?;
 
-    let opts: EditOptions = edit
+    let mut opts: EditOptions = edit
         .options_json
         .as_deref()
         .and_then(|s| serde_json::from_str(s).ok())
         .ok_or("This run can't be re-rendered (it predates re-render support — make a new edit).")?;
+
+    // Apply the overlay override (add/change/remove from the timeline editor).
+    if let Some(ov) = overlays {
+        opts.overlays = ov;
+    }
 
     if opts.output_dir.as_deref().map(str::trim).unwrap_or("").is_empty() {
         return Err("This run has no saved output folder to re-render into.".to_string());
@@ -628,6 +684,11 @@ fn rerender_inner(
     }
     log_msg(edit_map, job_id, &format!("Re-rendering {} clip(s) from the saved cut.", cut_list.len()));
 
+    // Re-resolve overlays against the (possibly re-trimmed) cut so auto-placed
+    // snippets land in the new pauses; explicitly-pinned ones keep their time.
+    let total_timeline: f32 = cut_list.iter().map(|c| (c.end - c.start).max(0.0)).sum();
+    let overlays = resolve_overlays(&opts.overlays, &speech, total_timeline, edit_map, job_id);
+
     let mut edl_value = build_edl_json(
         production_id,
         production_title,
@@ -639,7 +700,7 @@ fn rerender_inner(
         enhance_flags,
         opts.enhance_voice_intensity,
     );
-    edl_value["timeline"] = build_timeline(cut_list, &speech, &duck, mute, fade, opts, music_name.as_deref(), enhance_flags);
+    edl_value["timeline"] = build_timeline(cut_list, &speech, &duck, mute, fade, opts, music_name.as_deref(), enhance_flags, &overlays);
     let pretty = serde_json::to_string_pretty(&edl_value).unwrap_or_else(|_| "{}".to_string());
     std::fs::write(&edl_path, &pretty).map_err(|e| format!("Failed to write EDL JSON: {}", e))?;
 
@@ -649,6 +710,7 @@ fn rerender_inner(
         enhance_flags, opts.enhance_voice_intensity,
         &[], &work_dir, &output_path,
         music_path.as_deref(), opts.music_volume, opts.music_duck_volume, &duck, fade,
+        &overlays,
     )?;
 
     Ok(AssembledEdit {
@@ -843,6 +905,11 @@ fn run_edit_inner(
         .map(|c| opts.enhance_voice_video_ids.contains(&c.video_id))
         .collect();
 
+    // Resolve overlay snippets and auto-place them in the longest pauses. The
+    // total timeline length is the sum of the chosen clip durations.
+    let total_timeline: f32 = cut_list.iter().map(|c| (c.end - c.start).max(0.0)).sum();
+    let overlays = resolve_overlays(&opts.overlays, &speech_timeline, total_timeline, edit_map, job_id);
+
     // Build the EDL JSON deliverable, plus a timeline (clips laid end-to-end +
     // speech intervals + music levels) for the editor-style preview.
     let mut edl_value = build_edl_json(
@@ -856,7 +923,7 @@ fn run_edit_inner(
         &enhance_flags,
         opts.enhance_voice_intensity,
     );
-    edl_value["timeline"] = build_timeline(&cut_list, &speech_timeline, &speech_timeline, &[], &[], opts, music_name.as_deref(), &enhance_flags);
+    edl_value["timeline"] = build_timeline(&cut_list, &speech_timeline, &speech_timeline, &[], &[], opts, music_name.as_deref(), &enhance_flags, &overlays);
     let pretty = serde_json::to_string_pretty(&edl_value).unwrap_or_else(|_| "{}".to_string());
     std::fs::write(&edl_path, &pretty).map_err(|e| format!("Failed to write EDL JSON: {}", e))?;
     log_msg(edit_map, job_id, &format!("Wrote edit decision list to {}", edl_path.display()));
@@ -879,6 +946,7 @@ fn run_edit_inner(
         opts.music_duck_volume,
         &speech_timeline,
         &[],
+        &overlays,
     )?;
 
     Ok(AssembledEdit {
@@ -912,6 +980,8 @@ fn assemble_final(
     music_duck_volume: f32,
     duck_intervals: &[(f32, f32)],
     fade_intervals: &[(f32, f32)],
+    // Overlay snippets to composite on after the cut (+ music) is assembled.
+    overlays: &[ffmpeg_service::OverlayPlacement],
 ) -> Result<(), String> {
     let (target_w, target_h, target_fps) = resolve_target_spec(cut_list, takes_for_spec);
     set_stage(
@@ -1035,6 +1105,47 @@ fn assemble_final(
     } else {
         set_stage(edit_map, job_id, "stitching", "Joining clips into the final video…");
         ffmpeg_service::concat_clips(&segments, output_path)?;
+    }
+
+    // Composite any overlay snippets (e.g. a "Subscribe" bug) onto the finished
+    // video, in the pauses where no one is talking. Best-effort: if it fails we
+    // keep the un-overlaid video rather than failing the whole run.
+    if !overlays.is_empty() {
+        set_stage(
+            edit_map,
+            job_id,
+            "overlays",
+            &format!("Adding {} overlay snippet(s)…", overlays.len()),
+        );
+        for o in overlays {
+            let name = o
+                .path
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_default();
+            log_msg(
+                edit_map,
+                job_id,
+                &format!("Overlay {} at {:.2}s for {:.2}s ({})", name, o.start, o.duration, o.position),
+            );
+        }
+        let with_ov = work_dir.join("_overlaid.mp4");
+        match ffmpeg_service::composite_overlays(output_path, overlays, &with_ov) {
+            Ok(()) => {
+                std::fs::rename(&with_ov, output_path)
+                    .or_else(|_| std::fs::copy(&with_ov, output_path).map(|_| ()))
+                    .map_err(|e| format!("Failed to write overlaid video: {}", e))?;
+                log_msg(edit_map, job_id, "Added overlay snippet(s).");
+            }
+            Err(e) => {
+                warn!("[edit {}] overlay compositing failed: {}", job_id, e);
+                log_msg(
+                    edit_map,
+                    job_id,
+                    &format!("Overlay compositing failed ({}). Keeping the video without overlays.", e),
+                );
+            }
+        }
     }
 
     let _ = std::fs::remove_dir_all(work_dir);
@@ -1309,6 +1420,7 @@ fn build_timeline(
     opts: &EditOptions,
     music_name: Option<&str>,
     enhance_flags: &[bool],
+    overlays: &[ffmpeg_service::OverlayPlacement],
 ) -> serde_json::Value {
     let mut clips = Vec::new();
     let mut cursor = 0.0f32;
@@ -1349,6 +1461,7 @@ fn build_timeline(
         "duck": to_json(duck),
         "muted": to_json(muted),
         "fades": to_json(fade),
+        "overlays": overlays_to_json(&opts.overlays, overlays),
         "music": {
             "present": music_present,
             "name": music_name,
@@ -1889,6 +2002,148 @@ fn non_speech_regions(speech: &[(f32, f32)], total: f32) -> Vec<(f32, f32)> {
     out.into_iter().filter(|(s, e)| e - s > 0.05).collect()
 }
 
+/// Pick a start time on the final timeline for each auto-placed overlay,
+/// preferring the longest non-speech `gaps` so each snippet lands where no one
+/// is talking. Overlays are assigned to distinct gaps (largest first, in input
+/// order); a snippet is centered within its gap when it fits, otherwise anchored
+/// at the gap start. With more overlays than gaps, the extras reuse the largest
+/// gaps. Returns one start per input duration, in order. Pure for testability.
+fn auto_overlay_starts(gaps: &[(f32, f32)], durations: &[f32]) -> Vec<f32> {
+    let mut ranked: Vec<(f32, f32)> = gaps.iter().copied().filter(|(s, e)| e > s).collect();
+    // Longest gap first; ties keep earlier gaps first (stable on time order).
+    ranked.sort_by(|a, b| {
+        (b.1 - b.0)
+            .partial_cmp(&(a.1 - a.0))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    durations
+        .iter()
+        .enumerate()
+        .map(|(i, &dur)| {
+            if ranked.is_empty() {
+                return 0.0;
+            }
+            let (gs, ge) = ranked[i % ranked.len()];
+            let gap_len = ge - gs;
+            let start = if dur < gap_len {
+                gs + (gap_len - dur) / 2.0
+            } else {
+                gs
+            };
+            start.max(0.0)
+        })
+        .collect()
+}
+
+/// Resolve the run's overlay specs into concrete placements: probe each
+/// snippet's duration, drop any whose file/duration is unusable, and assign the
+/// auto-placed ones to the longest non-speech gaps. `speech` are the speech
+/// intervals on the final timeline and `total` its duration.
+fn resolve_overlays(
+    specs: &[OverlaySpec],
+    speech: &[(f32, f32)],
+    total: f32,
+    edit_map: &EditJobMap,
+    job_id: &str,
+) -> Vec<ffmpeg_service::OverlayPlacement> {
+    if specs.is_empty() {
+        return Vec::new();
+    }
+
+    let mut usable: Vec<(&OverlaySpec, f32)> = Vec::new();
+    for spec in specs {
+        let p = std::path::Path::new(&spec.path);
+        if !p.exists() {
+            log_msg(edit_map, job_id, &format!("Overlay file not found, skipping: {}", spec.path));
+            continue;
+        }
+        let dur = ffmpeg_service::extract_metadata(p)
+            .and_then(|m| m.duration)
+            .unwrap_or(0.0);
+        if dur <= 0.0 {
+            log_msg(edit_map, job_id, &format!("Could not read overlay duration, skipping: {}", spec.path));
+            continue;
+        }
+        usable.push((spec, dur));
+    }
+    if usable.is_empty() {
+        return Vec::new();
+    }
+
+    let gaps = non_speech_regions(speech, total);
+    let auto_durations: Vec<f32> = usable
+        .iter()
+        .filter(|(s, _)| s.start.is_none())
+        .map(|(_, d)| *d)
+        .collect();
+    let auto_starts = auto_overlay_starts(&gaps, &auto_durations);
+
+    let mut placements = Vec::with_capacity(usable.len());
+    let mut auto_i = 0usize;
+    for (spec, dur) in usable {
+        let start = match spec.start {
+            Some(s) => s.max(0.0),
+            None => {
+                let s = auto_starts.get(auto_i).copied().unwrap_or(0.0);
+                auto_i += 1;
+                s
+            }
+        };
+        let start = if total > 0.0 { start.min((total - 0.1).max(0.0)) } else { start };
+        placements.push(ffmpeg_service::OverlayPlacement {
+            path: std::path::PathBuf::from(&spec.path),
+            start,
+            duration: dur,
+            chroma_color: spec.chroma_color.clone(),
+            similarity: spec.similarity,
+            blend: spec.blend,
+            scale: spec.scale,
+            opacity: spec.opacity,
+            position: spec.position.clone(),
+        });
+    }
+    placements
+}
+
+/// JSON view of overlay placements for the EDL/timeline. Carries both the
+/// display fields (where each snippet landed) AND the full spec (path + keying
+/// settings) so the timeline editor can rehydrate, tweak, and re-send overlays
+/// on a re-render without re-picking the file.
+fn overlays_to_json(
+    specs: &[OverlaySpec],
+    placements: &[ffmpeg_service::OverlayPlacement],
+) -> Vec<serde_json::Value> {
+    placements
+        .iter()
+        .map(|p| {
+            // Recover the human label from the matching spec (by path), if any.
+            let label = specs
+                .iter()
+                .find(|s| std::path::Path::new(&s.path) == p.path)
+                .and_then(|s| s.label.clone());
+            let filename = p
+                .path
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string());
+            serde_json::json!({
+                "label": label,
+                "filename": filename,
+                "path": p.path.to_string_lossy(),
+                "start": round2(p.start),
+                "duration": round2(p.duration),
+                "end": round2(p.start + p.duration),
+                "position": p.position,
+                "chroma_color": p.chroma_color,
+                "similarity": round2(p.similarity),
+                "blend": round2(p.blend),
+                "scale": round2(p.scale),
+                "opacity": round2(p.opacity),
+            })
+        })
+        .collect()
+}
+
 /// Parse + validate the model's timeline-edit JSON against the real cut: keep
 /// only clip edits whose `order` exists, clamp any source range to the clip's
 /// listed source range, and keep music regions with a known action clamped to
@@ -2140,6 +2395,36 @@ mod tests {
     fn non_speech_regions_are_the_gaps() {
         let r = non_speech_regions(&[(2.0, 4.0), (6.0, 7.0)], 10.0);
         assert_eq!(r, vec![(0.0, 2.0), (4.0, 6.0), (7.0, 10.0)]);
+    }
+
+    #[test]
+    fn overlay_centers_in_the_longest_gap() {
+        // Gaps of length 2, 6, 1 → the longest is (4,10); a 4s snippet centers
+        // there: 4 + (6-4)/2 = 5.0.
+        let gaps = vec![(0.0, 2.0), (4.0, 10.0), (11.0, 12.0)];
+        let starts = auto_overlay_starts(&gaps, &[4.0]);
+        assert_eq!(starts, vec![5.0]);
+    }
+
+    #[test]
+    fn overlays_spread_across_distinct_gaps_largest_first() {
+        // Two snippets → the two longest gaps, in input order: (4,10) then (0,3).
+        let gaps = vec![(0.0, 3.0), (4.0, 10.0), (11.0, 11.5)];
+        let starts = auto_overlay_starts(&gaps, &[2.0, 2.0]);
+        // First (longest gap, len 6): 4 + (6-2)/2 = 6.0. Second (gap len 3): 0 + (3-2)/2 = 0.5.
+        assert_eq!(starts, vec![6.0, 0.5]);
+    }
+
+    #[test]
+    fn overlay_anchors_at_gap_start_when_it_does_not_fit() {
+        let gaps = vec![(2.0, 5.0)];
+        // 10s snippet doesn't fit a 3s gap → anchored at the gap start.
+        assert_eq!(auto_overlay_starts(&gaps, &[10.0]), vec![2.0]);
+    }
+
+    #[test]
+    fn overlay_with_no_gaps_defaults_to_zero() {
+        assert_eq!(auto_overlay_starts(&[], &[3.0]), vec![0.0]);
     }
 
     #[test]

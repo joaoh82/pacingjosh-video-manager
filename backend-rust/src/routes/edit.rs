@@ -10,6 +10,7 @@ use crate::models::ProductionEditResponse;
 use crate::services::ai_service;
 use crate::services::edit_service::{self, EditJobMap, EditOptions};
 use crate::services::ffmpeg_service;
+use crate::services::overlay_service;
 
 fn default_captions() -> bool { true }
 fn default_music_volume() -> f32 { 0.3 }
@@ -60,6 +61,52 @@ pub struct StartEditRequest {
     /// Voice-enhancement intensity, 0.0–1.0 (how aggressively to remove noise).
     #[serde(default = "default_enhance_intensity")]
     pub enhance_voice_intensity: f32,
+    /// Overlay snippets (e.g. a "Subscribe" bug) to composite onto the final
+    /// video in the pauses where no one is talking.
+    #[serde(default)]
+    pub overlays: Vec<OverlayReq>,
+}
+
+/// One overlay snippet on a start-edit request. Mirrors [`edit_service::OverlaySpec`].
+#[derive(Deserialize)]
+pub struct OverlayReq {
+    pub path: String,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default = "default_overlay_chroma")]
+    pub chroma_color: String,
+    #[serde(default = "default_overlay_similarity")]
+    pub similarity: f32,
+    #[serde(default = "default_overlay_blend")]
+    pub blend: f32,
+    #[serde(default = "default_overlay_scale")]
+    pub scale: f32,
+    #[serde(default = "default_overlay_opacity")]
+    pub opacity: f32,
+    #[serde(default = "default_overlay_position")]
+    pub position: String,
+    #[serde(default)]
+    pub start: Option<f32>,
+}
+
+fn default_overlay_chroma() -> String { "0xFFFFFF".to_string() }
+fn default_overlay_similarity() -> f32 { 0.10 }
+fn default_overlay_blend() -> f32 { 0.05 }
+fn default_overlay_scale() -> f32 { 1.0 }
+fn default_overlay_opacity() -> f32 { 1.0 }
+fn default_overlay_position() -> String { "center".to_string() }
+
+/// List the built-in overlay snippets (e.g. the "Subscribe" bug), writing them
+/// out to the app-data overlays folder so the returned paths are valid on disk.
+#[get("/overlays/builtin")]
+async fn builtin_overlays(config: web::Data<ConfigManager>) -> HttpResponse {
+    let app_data_dir = config
+        .config_path
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let overlays = overlay_service::list_builtin_overlays(&app_data_dir);
+    HttpResponse::Ok().json(overlays)
 }
 
 /// Kick off the edit pipeline for a production. Returns a job id to poll.
@@ -88,6 +135,21 @@ async fn start_edit(
         tighten_gap: body.tighten_gap,
         enhance_voice_video_ids: body.enhance_voice.clone(),
         enhance_voice_intensity: body.enhance_voice_intensity,
+        overlays: body
+            .overlays
+            .iter()
+            .map(|o| edit_service::OverlaySpec {
+                path: o.path.clone(),
+                label: o.label.clone(),
+                chroma_color: o.chroma_color.clone(),
+                similarity: o.similarity,
+                blend: o.blend,
+                scale: o.scale,
+                opacity: o.opacity,
+                position: o.position.clone(),
+                start: o.start,
+            })
+            .collect(),
     };
 
     match edit_service::start_edit(
@@ -184,6 +246,10 @@ pub struct RerenderRequest {
     /// enhancement on the timeline. Legacy/alternate to `clips[].enhance`.
     #[serde(default)]
     pub enhance_clips: Vec<i32>,
+    /// Overlay snippets to use on this re-render. Omitted → keep whatever the run
+    /// was saved with; present → replace them (add/change/remove overlays).
+    #[serde(default)]
+    pub overlays: Option<Vec<OverlayReq>>,
 }
 
 #[derive(Deserialize)]
@@ -236,12 +302,29 @@ async fn rerender_edit(
         })
         .collect();
 
+    let overlays: Option<Vec<edit_service::OverlaySpec>> = body.overlays.as_ref().map(|list| {
+        list.iter()
+            .map(|o| edit_service::OverlaySpec {
+                path: o.path.clone(),
+                label: o.label.clone(),
+                chroma_color: o.chroma_color.clone(),
+                similarity: o.similarity,
+                blend: o.blend,
+                scale: o.scale,
+                opacity: o.opacity,
+                position: o.position.clone(),
+                start: o.start,
+            })
+            .collect()
+    });
+
     match edit_service::start_rerender(
         edit_id,
         mute,
         fade,
         clip_edits,
         body.enhance_clips.clone(),
+        overlays,
         pool.get_ref().clone(),
         config.get_ai_settings(),
         edit_map.get_ref().clone(),
@@ -714,6 +797,7 @@ fn reveal_in_explorer(path: &str, select: bool) -> Result<(), String> {
 
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(start_edit)
+        .service(builtin_overlays)
         .service(edit_status)
         .service(list_edits)
         .service(get_latest_edit)
