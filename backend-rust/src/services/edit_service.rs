@@ -193,25 +193,28 @@ pub struct EditOptions {
     pub overlays: Vec<OverlaySpec>,
 }
 
-/// One overlay snippet to add to a production edit: a short video (with a solid
-/// background to key out) dropped on top of the talking footage. By default it's
-/// auto-placed in the longest pause where no one is speaking; set `start` to pin
-/// it to a specific time on the final timeline instead.
+/// One overlay snippet to add to a production edit: a transparent GIF/image
+/// dropped on top of the talking footage. By default it's auto-placed in the
+/// longest pause where no one is speaking; set `start` to pin it to a specific
+/// time on the final timeline instead.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct OverlaySpec {
-    /// Path to the overlay video file.
+    /// Path to the overlay file — a transparent GIF or image (PNG/JPG/…). A
+    /// video file still works (composited as-is), but GIFs/images with native
+    /// alpha are the intended, better-looking path.
     pub path: String,
     /// Optional display label (e.g. "Subscribe"), echoed into the EDL/timeline.
     #[serde(default)]
     pub label: Option<String>,
     /// Background colour to chroma-key out, as an ffmpeg colour (e.g.
-    /// `0xFFFFFF`). Empty string → no keying (composited opaque).
+    /// `0xFFFFFF`). Empty (the default) → no keying; the snippet's native
+    /// transparency is used. Kept for opaque-image / legacy-video fallback.
     #[serde(default = "default_overlay_chroma")]
     pub chroma_color: String,
-    /// colorkey similarity (0..1).
+    /// colorkey similarity (0..1) — only used when `chroma_color` is set.
     #[serde(default = "default_overlay_similarity")]
     pub similarity: f32,
-    /// colorkey blend (0..1).
+    /// colorkey blend (0..1) — only used when `chroma_color` is set.
     #[serde(default = "default_overlay_blend")]
     pub blend: f32,
     /// Scale factor for the snippet (1.0 = original size).
@@ -223,18 +226,27 @@ pub struct OverlaySpec {
     /// Position preset ("center", "bottom", "bottom_right", …).
     #[serde(default = "default_overlay_position")]
     pub position: String,
+    /// How long the snippet stays on screen (seconds). `None` → use the snippet's
+    /// own length (GIF/video) or a default for still images. GIFs/images loop or
+    /// hold to fill this window.
+    #[serde(default)]
+    pub duration: Option<f32>,
     /// Explicit start time on the final timeline (seconds). `None` → auto-place
     /// in the longest non-speech gap.
     #[serde(default)]
     pub start: Option<f32>,
 }
 
-fn default_overlay_chroma() -> String { "0xFFFFFF".to_string() }
+fn default_overlay_chroma() -> String { String::new() }
 fn default_overlay_similarity() -> f32 { 0.10 }
 fn default_overlay_blend() -> f32 { 0.05 }
 fn default_overlay_scale() -> f32 { 1.0 }
 fn default_overlay_opacity() -> f32 { 1.0 }
 fn default_overlay_position() -> String { "center".to_string() }
+
+/// Default on-screen duration (seconds) for a still-image overlay, which has no
+/// intrinsic length of its own.
+const DEFAULT_IMAGE_OVERLAY_SECS: f32 = 5.0;
 
 /// A user edit to one clip of a saved cut, applied on re-render. Identified by
 /// the clip `order` in the saved EDL. `source_start`/`source_end` (when set)
@@ -2058,13 +2070,35 @@ fn resolve_overlays(
             log_msg(edit_map, job_id, &format!("Overlay file not found, skipping: {}", spec.path));
             continue;
         }
-        let dur = ffmpeg_service::extract_metadata(p)
+        // Resolve the on-screen duration: an explicit override wins; otherwise
+        // use the snippet's own length (GIF/video, via ffprobe); still images
+        // have no length so they fall back to a default and loop/hold.
+        let ext = p
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.to_lowercase())
+            .unwrap_or_default();
+        let probed = ffmpeg_service::extract_metadata(p)
             .and_then(|m| m.duration)
-            .unwrap_or(0.0);
-        if dur <= 0.0 {
-            log_msg(edit_map, job_id, &format!("Could not read overlay duration, skipping: {}", spec.path));
-            continue;
-        }
+            .filter(|d| *d > 0.0);
+        let dur = spec
+            .duration
+            .filter(|d| *d > 0.0)
+            .or(probed)
+            .or_else(|| {
+                if ffmpeg_service::is_static_image_ext(&ext) {
+                    Some(DEFAULT_IMAGE_OVERLAY_SECS)
+                } else {
+                    None
+                }
+            });
+        let dur = match dur {
+            Some(d) => d,
+            None => {
+                log_msg(edit_map, job_id, &format!("Could not read overlay duration, skipping: {}", spec.path));
+                continue;
+            }
+        };
         usable.push((spec, dur));
     }
     if usable.is_empty() {

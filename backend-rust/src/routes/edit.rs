@@ -86,10 +86,12 @@ pub struct OverlayReq {
     #[serde(default = "default_overlay_position")]
     pub position: String,
     #[serde(default)]
+    pub duration: Option<f32>,
+    #[serde(default)]
     pub start: Option<f32>,
 }
 
-fn default_overlay_chroma() -> String { "0xFFFFFF".to_string() }
+fn default_overlay_chroma() -> String { String::new() }
 fn default_overlay_similarity() -> f32 { 0.10 }
 fn default_overlay_blend() -> f32 { 0.05 }
 fn default_overlay_scale() -> f32 { 1.0 }
@@ -147,6 +149,7 @@ async fn start_edit(
                 scale: o.scale,
                 opacity: o.opacity,
                 position: o.position.clone(),
+                duration: o.duration,
                 start: o.start,
             })
             .collect(),
@@ -313,6 +316,7 @@ async fn rerender_edit(
                 scale: o.scale,
                 opacity: o.opacity,
                 position: o.position.clone(),
+                duration: o.duration,
                 start: o.start,
             })
             .collect()

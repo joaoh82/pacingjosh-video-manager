@@ -77,9 +77,18 @@ async fn browse_folder() -> HttpResponse {
     }
 }
 
+#[derive(serde::Deserialize)]
+struct BrowseFileQuery {
+    /// Which file types to show: "image" (images + GIFs) or anything else
+    /// (audio/video, for background music). Defaults to media.
+    #[serde(default)]
+    kind: Option<String>,
+}
+
 #[get("/browse-file")]
-async fn browse_file() -> HttpResponse {
-    let result = tokio::task::spawn_blocking(open_file_dialog).await;
+async fn browse_file(query: web::Query<BrowseFileQuery>) -> HttpResponse {
+    let kind = query.kind.clone().unwrap_or_default();
+    let result = tokio::task::spawn_blocking(move || open_file_dialog(&kind)).await;
 
     match result {
         Ok(Ok(path)) => HttpResponse::Ok().json(serde_json::json!({
@@ -97,22 +106,32 @@ async fn browse_file() -> HttpResponse {
     }
 }
 
-fn open_file_dialog() -> Result<String, String> {
+/// Open an OS file picker. `kind == "image"` filters to images + GIFs (for
+/// overlay snippets); anything else filters to audio/video (background music).
+fn open_file_dialog(kind: &str) -> Result<String, String> {
+    let image = kind == "image";
+    let title = if image { "Select an image or GIF" } else { "Select Background Music" };
+
     #[cfg(target_os = "windows")]
     {
         use std::process::Command;
-        let script = r#"
-Add-Type -AssemblyName System.Windows.Forms
-$dialog = New-Object System.Windows.Forms.OpenFileDialog
-$dialog.Title = "Select Background Music"
-$dialog.Filter = "Audio/Video (*.mp3;*.wav;*.m4a;*.aac;*.flac;*.ogg;*.mp4;*.mov)|*.mp3;*.wav;*.m4a;*.aac;*.flac;*.ogg;*.mp4;*.mov|All files (*.*)|*.*"
-$result = $dialog.ShowDialog()
-if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
-    Write-Output $dialog.FileName
-}
-"#;
+        let filter = if image {
+            "Images & GIFs (*.gif;*.png;*.jpg;*.jpeg;*.webp;*.bmp)|*.gif;*.png;*.jpg;*.jpeg;*.webp;*.bmp|All files (*.*)|*.*"
+        } else {
+            "Audio/Video (*.mp3;*.wav;*.m4a;*.aac;*.flac;*.ogg;*.mp4;*.mov)|*.mp3;*.wav;*.m4a;*.aac;*.flac;*.ogg;*.mp4;*.mov|All files (*.*)|*.*"
+        };
+        let script = format!(
+            "Add-Type -AssemblyName System.Windows.Forms\n\
+$dialog = New-Object System.Windows.Forms.OpenFileDialog\n\
+$dialog.Title = \"{title}\"\n\
+$dialog.Filter = \"{filter}\"\n\
+$result = $dialog.ShowDialog()\n\
+if ($result -eq [System.Windows.Forms.DialogResult]::OK) {{ Write-Output $dialog.FileName }}\n",
+            title = title,
+            filter = filter,
+        );
         let output = Command::new("powershell")
-            .args(["-NoProfile", "-Command", script])
+            .args(["-NoProfile", "-Command", &script])
             .output()
             .map_err(|e| format!("Failed to run PowerShell: {}", e))?;
 
@@ -127,16 +146,20 @@ if ($result -eq [System.Windows.Forms.DialogResult]::OK) {
     #[cfg(target_os = "macos")]
     {
         use std::process::Command;
-        let script = r#"
-try
-    set theFile to choose file with prompt "Select Background Music"
-    return POSIX path of theFile
-on error errMsg
-    return ""
-end try
-"#;
+        // Restrict to images (incl. GIF) when picking an overlay.
+        let type_clause = if image { " of type {\"public.image\"}" } else { "" };
+        let script = format!(
+            "try\n\
+    set theFile to choose file with prompt \"{title}\"{type_clause}\n\
+    return POSIX path of theFile\n\
+on error errMsg\n\
+    return \"\"\n\
+end try\n",
+            title = title,
+            type_clause = type_clause,
+        );
         let output = Command::new("osascript")
-            .args(["-e", script])
+            .args(["-e", &script])
             .output()
             .map_err(|e| format!("Failed to run osascript: {}", e))?;
 
@@ -151,8 +174,16 @@ end try
     #[cfg(target_os = "linux")]
     {
         use std::process::Command;
+        let mut args: Vec<String> = vec![
+            "--file-selection".to_string(),
+            format!("--title={}", title),
+        ];
+        if image {
+            args.push("--file-filter=Images & GIFs | *.gif *.png *.jpg *.jpeg *.webp *.bmp".to_string());
+            args.push("--file-filter=All files | *".to_string());
+        }
         let output = Command::new("zenity")
-            .args(["--file-selection", "--title=Select Background Music"])
+            .args(&args)
             .output()
             .map_err(|e| format!("Failed to run zenity: {}", e))?;
 
@@ -166,6 +197,7 @@ end try
 
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
+        let _ = title;
         Err("File picker not supported on this platform".to_string())
     }
 }

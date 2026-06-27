@@ -3,21 +3,23 @@
 //!
 //! The snippet ships embedded in the binary (so it's always available, even in
 //! the packaged desktop app) and is written out to `<app-data>/overlays/` the
-//! first time it's needed. Users can also point an overlay at any video file of
-//! their own; that path is used verbatim and never touches this module.
+//! first time it's needed. Overlays are transparent GIFs/PNGs — their native
+//! alpha is used, so there's no background to key out. Users can also point an
+//! overlay at any image/GIF of their own; that path is used verbatim.
 
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
-/// The bundled YouTube "Subscribe" snippet (a ~5s animation on a white
-/// background). Embedded from the repo asset so it ships with the binary.
-const SUBSCRIBE_BYTES: &[u8] = include_bytes!("../../../assets/videos/youtube-subscribe.mp4");
+/// The bundled YouTube "Subscribe" snippet — a ~5s animated GIF with a
+/// transparent background. Embedded from the repo asset so it ships with the
+/// binary.
+const SUBSCRIBE_BYTES: &[u8] = include_bytes!("../../../assets/overlays/youtube_subscribe.gif");
 
 /// Filename the bundled subscribe snippet is written out as.
-const SUBSCRIBE_FILENAME: &str = "youtube-subscribe.mp4";
+const SUBSCRIBE_FILENAME: &str = "youtube_subscribe.gif";
 
 /// Metadata for a built-in overlay, surfaced to the frontend so it can offer a
-/// one-click "add this overlay" affordance with sensible keying defaults.
+/// one-click "add this overlay" affordance.
 #[derive(Debug, Clone, Serialize)]
 pub struct BuiltinOverlay {
     /// Stable id for the built-in.
@@ -26,9 +28,6 @@ pub struct BuiltinOverlay {
     pub label: String,
     /// Absolute path to the snippet on disk (written out on demand).
     pub path: String,
-    /// Default chroma key colour to remove (the snippet's background), as an
-    /// ffmpeg colour, e.g. `0xFFFFFF` for white.
-    pub chroma_color: String,
 }
 
 /// The directory built-in overlays are written to under the app-data dir.
@@ -65,6 +64,5 @@ pub fn list_builtin_overlays(app_data_dir: &Path) -> Vec<BuiltinOverlay> {
         id: "subscribe".to_string(),
         label: "Subscribe button".to_string(),
         path: dir.join(SUBSCRIBE_FILENAME).to_string_lossy().to_string(),
-        chroma_color: "0xFFFFFF".to_string(),
     }]
 }

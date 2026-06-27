@@ -11,16 +11,18 @@ import {
   TimelineAiPlan,
   OverlaySpecPayload,
 } from '@/lib/types';
-import { getThumbnailUrl, aiEditTimeline, getBuiltinOverlays, browseFile } from '@/lib/api';
+import { getThumbnailUrl, aiEditTimeline, getBuiltinOverlays, browseImage } from '@/lib/api';
 
-/** An overlay snippet being edited on the timeline (re-render UI state). */
+/** An overlay snippet (transparent GIF/image) being edited on the timeline
+ * (re-render UI state). */
 interface OverlayItem {
   path: string;
   label: string;
-  removeBg: boolean;
-  baseColor: string;
   scale: number;
   position: string;
+  /** Legacy chroma key colour, preserved when re-rendering an older run that
+   * used a keyed video overlay. Empty for normal GIF/image overlays. */
+  chromaColor: string;
 }
 
 const OVERLAY_POSITIONS: { value: string; label: string }[] = [
@@ -38,14 +40,15 @@ function overlayLabelFromPath(p: string): string {
   return base.replace(/\.[^.]+$/, '');
 }
 
-/** Map an overlay editor item to the re-render payload (auto-placed, no start). */
+/** Map an overlay editor item to the re-render payload (auto-placed, no start).
+ * chroma_color is only sent when set (preserves a legacy keyed-video overlay). */
 function overlayItemToPayload(o: OverlayItem): OverlaySpecPayload {
   return {
     path: o.path,
     label: o.label || undefined,
-    chroma_color: o.removeBg ? o.baseColor : '',
     scale: o.scale,
     position: o.position,
+    ...(o.chromaColor ? { chroma_color: o.chromaColor } : {}),
   };
 }
 
@@ -224,10 +227,9 @@ export default function EditTimeline({
       .map((o) => ({
         path: o.path as string,
         label: o.label || o.filename || overlayLabelFromPath(o.path as string),
-        removeBg: (o.chroma_color ?? '') !== '',
-        baseColor: o.chroma_color && o.chroma_color !== '' ? o.chroma_color : '0xFFFFFF',
         scale: o.scale ?? 1.0,
         position: o.position || 'center',
+        chromaColor: o.chroma_color ?? '',
       }));
     overlaySeedRef.current = JSON.stringify(seededOverlays);
     setOverlayItems(seededOverlays);
@@ -452,10 +454,9 @@ export default function EditTimeline({
       addOverlayItem({
         path: sub.path,
         label: sub.label,
-        removeBg: true,
-        baseColor: sub.chroma_color || '0xFFFFFF',
         scale: 1.0,
         position: 'center',
+        chromaColor: '',
       });
     } catch (e: any) {
       setOverlayError(e?.message || 'Could not load the built-in Subscribe overlay.');
@@ -466,15 +467,14 @@ export default function EditTimeline({
 
   const handleAddCustomOverlay = async () => {
     try {
-      const r = await browseFile();
+      const r = await browseImage();
       if (r.success && r.path) {
         addOverlayItem({
           path: r.path,
           label: overlayLabelFromPath(r.path),
-          removeBg: true,
-          baseColor: '0xFFFFFF',
           scale: 1.0,
           position: 'center',
+          chromaColor: '',
         });
       }
     } catch {
@@ -1218,7 +1218,7 @@ export default function EditTimeline({
               disabled={busy}
               className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300 hover:bg-gray-200 disabled:opacity-40"
             >
-              ➕ Add overlay…
+              ➕ Add image/GIF…
             </button>
             <span className="text-[10px] text-gray-400 dark:text-gray-500">
               dropped into the longest pause; re-render to apply
@@ -1237,15 +1237,6 @@ export default function EditTimeline({
                   <span className="text-[11px] text-gray-700 dark:text-gray-200 truncate max-w-[180px]" title={o.path}>
                     {/subscrib/i.test(o.label) ? '🔔' : '▶'} {o.label || overlayLabelFromPath(o.path)}
                   </span>
-                  <label className="flex items-center gap-1 text-[10px] text-gray-600 dark:text-gray-300">
-                    <input
-                      type="checkbox"
-                      checked={o.removeBg}
-                      onChange={(e) => updateOverlayItem(idx, { removeBg: e.target.checked })}
-                      disabled={busy}
-                    />
-                    Remove bg
-                  </label>
                   <label className="flex items-center gap-1 text-[10px] text-gray-600 dark:text-gray-300">
                     Pos
                     <select
