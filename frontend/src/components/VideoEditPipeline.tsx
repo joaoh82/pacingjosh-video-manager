@@ -18,6 +18,7 @@ import {
   generateEditCopy,
   browseFolder,
   browseFile,
+  browseImage,
   getBuiltinOverlays,
 } from '@/lib/api';
 
@@ -41,15 +42,11 @@ interface VideoEditPipelineProps {
   onClose: () => void;
 }
 
-/** An overlay snippet the creator added to a run (UI state). It's auto-placed
- * in the longest pause where no one is talking. */
+/** An overlay snippet (transparent GIF/image) the creator added to a run (UI
+ * state). It's auto-placed in the longest pause where no one is talking. */
 interface OverlayItem {
   path: string;
   label: string;
-  /** Remove the snippet's solid background (chroma key). */
-  removeBg: boolean;
-  /** Background colour to key out when `removeBg` is on (e.g. "0xFFFFFF"). */
-  baseColor: string;
   /** Scale factor (1.0 = original size). */
   scale: number;
   /** Position preset. */
@@ -276,7 +273,6 @@ export default function VideoEditPipeline({
         overlays: overlays.map((o) => ({
           path: o.path,
           label: o.label || undefined,
-          chroma_color: o.removeBg ? o.baseColor : '',
           scale: o.scale,
           position: o.position,
         })),
@@ -322,8 +318,6 @@ export default function VideoEditPipeline({
       addOverlay({
         path: sub.path,
         label: sub.label,
-        removeBg: true,
-        baseColor: sub.chroma_color || '0xFFFFFF',
         scale: 1.0,
         position: 'center',
       });
@@ -336,13 +330,11 @@ export default function VideoEditPipeline({
 
   const handleAddCustomOverlay = async () => {
     try {
-      const r = await browseFile();
+      const r = await browseImage();
       if (r.success && r.path) {
         addOverlay({
           path: r.path,
           label: labelFromPath(r.path),
-          removeBg: true,
-          baseColor: '0xFFFFFF',
           scale: 1.0,
           position: 'center',
         });
@@ -885,9 +877,9 @@ export default function VideoEditPipeline({
                       Overlays (optional)
                     </label>
                     <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
-                      Drop a snippet (like a Subscribe button) on top of the video. Each one is
-                      placed automatically in the longest pause where you&apos;re not talking, with
-                      its background removed.
+                      Drop a transparent GIF or image (like a Subscribe button) on top of the
+                      video. Each one is placed automatically in the longest pause where you&apos;re
+                      not talking.
                     </p>
                     <div className="flex flex-wrap gap-2">
                       <button
@@ -904,7 +896,7 @@ export default function VideoEditPipeline({
                         disabled={running}
                         className="btn btn-secondary text-sm whitespace-nowrap"
                       >
-                        ➕ Add overlay…
+                        ➕ Add image/GIF…
                       </button>
                     </div>
 
@@ -940,15 +932,6 @@ export default function VideoEditPipeline({
                               {o.path}
                             </div>
                             <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-                              <label className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300">
-                                <input
-                                  type="checkbox"
-                                  checked={o.removeBg}
-                                  onChange={(e) => updateOverlay(idx, { removeBg: e.target.checked })}
-                                  disabled={running}
-                                />
-                                Remove background
-                              </label>
                               <label className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300">
                                 Position
                                 <select

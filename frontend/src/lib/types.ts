@@ -375,24 +375,24 @@ export interface StartEditPayload {
 }
 
 /** One overlay snippet to composite onto the final video (sent on start-edit).
- * By default it's auto-placed in the longest pause where no one is talking. */
+ * A transparent GIF/PNG (its native alpha is used). Auto-placed in the longest
+ * pause where no one is talking. */
 export interface OverlaySpecPayload {
-  /** Path to the overlay video file. */
+  /** Path to the overlay file (transparent GIF/image). */
   path: string;
   /** Display label (e.g. "Subscribe"). */
   label?: string;
-  /** Background colour to chroma-key out (e.g. "0xFFFFFF"). "" disables keying. */
+  /** Optional background colour to chroma-key out (e.g. "0xFFFFFF"). Empty/omit
+   * → use the snippet's native transparency (the normal case). */
   chroma_color?: string;
-  /** colorkey similarity (0..1). */
-  similarity?: number;
-  /** colorkey blend (0..1). */
-  blend?: number;
   /** Scale factor (1.0 = original size). */
   scale?: number;
   /** Opacity (0..1). */
   opacity?: number;
   /** Position preset ("center", "bottom", "bottom_right", …). */
   position?: string;
+  /** On-screen duration (seconds); omit to use the snippet's own length. */
+  duration?: number;
   /** Explicit start time on the final timeline (seconds); omit to auto-place. */
   start?: number;
 }
@@ -402,5 +402,4 @@ export interface BuiltinOverlay {
   id: string;
   label: string;
   path: string;
-  chroma_color: string;
 }

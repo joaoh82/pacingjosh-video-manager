@@ -135,10 +135,14 @@ export async function browseFolder(): Promise<BrowseFolderResponse> {
   return fetchApi<BrowseFolderResponse>('/api/browse-folder');
 }
 
-/** Open an OS file picker (used for choosing a background-music track or an
- * overlay snippet). */
+/** Open an OS file picker (used for choosing a background-music track). */
 export async function browseFile(): Promise<BrowseFolderResponse> {
   return fetchApi<BrowseFolderResponse>('/api/browse-file');
+}
+
+/** Open an OS file picker filtered to images + GIFs (for overlay snippets). */
+export async function browseImage(): Promise<BrowseFolderResponse> {
+  return fetchApi<BrowseFolderResponse>('/api/browse-file?kind=image');
 }
 
 /** List the built-in overlay snippets (e.g. the "Subscribe" bug). */

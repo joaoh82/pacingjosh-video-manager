@@ -674,6 +674,13 @@ pub struct OverlayPlacement {
     pub position: String,
 }
 
+/// Image extensions treated as a single still frame, held on screen (looped via
+/// `-loop 1`) for the overlay's display window. GIFs are handled separately
+/// (animated, looped via `-ignore_loop 0`); anything else is treated as video.
+pub fn is_static_image_ext(ext: &str) -> bool {
+    matches!(ext, "png" | "jpg" | "jpeg" | "webp" | "bmp")
+}
+
 /// Overlay x/y position expressions (in `overlay` filter syntax, using W/H for
 /// the base frame and w/h for the snippet) for a named preset. `margin` is the
 /// edge inset in pixels for the non-centered presets. Pure for testability.
@@ -773,6 +780,19 @@ pub fn composite_overlays(
     let mut cmd = ffmpeg_cmd();
     cmd.arg("-i").arg(base);
     for o in overlays {
+        // Loop animated GIFs and hold static images for the whole on-screen
+        // window; real video overlays just play through once.
+        let ext = o
+            .path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.to_lowercase())
+            .unwrap_or_default();
+        if ext == "gif" {
+            cmd.args(["-ignore_loop", "0"]);
+        } else if is_static_image_ext(&ext) {
+            cmd.args(["-loop", "1"]);
+        }
         cmd.arg("-i").arg(&o.path);
     }
     let output = cmd
