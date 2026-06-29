@@ -431,14 +431,6 @@ export default function EditTimeline({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [overlayItems, editedSpeech, dur, timeline]);
 
-  // Which overlays are visible at the current playhead position.
-  const activeOverlays = useMemo(() => {
-    if (!showOverlayPreview) return [];
-    const t = remapPoint(currentTime);
-    return livePlacements.filter((p) => t >= p.start && t <= p.end);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showOverlayPreview, livePlacements, currentTime]);
-
   // Map a time on the ORIGINAL render onto the edited timeline (for the playhead).
   const remapPoint = (tOld: number): number => {
     let cursor = 0;
@@ -456,6 +448,15 @@ export default function EditTimeline({
     }
     return cursor;
   };
+
+  // Which overlays are visible at the current playhead position. Defined after
+  // remapPoint so it isn't referenced before initialization at render time.
+  const activeOverlays = useMemo(() => {
+    if (!showOverlayPreview) return [];
+    const t = remapPoint(currentTime);
+    return livePlacements.filter((p) => t >= p.start && t <= p.end);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showOverlayPreview, livePlacements, currentTime]);
 
   const structuralEdits = useMemo(
     () =>
