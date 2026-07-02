@@ -393,11 +393,12 @@ pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps={fps}",
         fps = fps
     );
     // Burn in captions last so they're sized relative to the final frame.
-    // Portrait (shorts) frames get the platform-native look: bold text and a
-    // higher bottom margin so the captions clear the Reels/Shorts/TikTok UI.
+    // Portrait (shorts) frames get the platform-native look: bold text placed
+    // in the lower third — above the Reels/Shorts/TikTok UI chrome, but well
+    // below center (MarginV is in ASS script units, ~288 per frame height).
     if let Some(name) = subtitle_name {
         let style = if h > w {
-            "Fontsize=16,Bold=1,Outline=1,Shadow=0,MarginV=110"
+            "Fontsize=16,Bold=1,Outline=1,Shadow=0,MarginV=60"
         } else {
             "Fontsize=18,Outline=1,Shadow=0,MarginV=40"
         };
