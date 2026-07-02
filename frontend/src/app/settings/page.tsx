@@ -341,8 +341,11 @@ export default function SettingsPage() {
                     <option value="elevenlabs">ElevenLabs (Scribe)</option>
                     <option value="openai">OpenAI (Whisper)</option>
                     {/* Legacy only: Gemini returns no word timestamps, so captions,
-                        tighten and music ducking degrade. Shown only if already set. */}
-                    {aiForm.transcription_provider === 'gemini' && (
+                        tighten and music ducking degrade. Kept while the SAVED
+                        setting is still gemini (so a user can switch back before
+                        saving), or while it's the current form value. */}
+                    {(aiSettings?.transcription_provider === 'gemini' ||
+                      aiForm.transcription_provider === 'gemini') && (
                       <option value="gemini">Google Gemini (legacy — no word timestamps)</option>
                     )}
                   </select>
