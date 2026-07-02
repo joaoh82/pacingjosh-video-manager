@@ -322,16 +322,40 @@ export default function SettingsPage() {
                     Transcription provider
                   </label>
                   <select
-                    value={aiForm.transcription_provider || 'gemini'}
-                    onChange={(e) =>
-                      setAiForm({ ...aiForm, transcription_provider: e.target.value })
-                    }
+                    value={aiForm.transcription_provider || 'elevenlabs'}
+                    onChange={(e) => {
+                      const provider = e.target.value;
+                      // Model ids are provider-specific, so switching providers
+                      // re-seeds the model with that provider's default.
+                      const defaultModel =
+                        provider === 'elevenlabs' ? 'scribe_v1' :
+                        provider === 'openai' ? 'whisper-1' : '';
+                      setAiForm({
+                        ...aiForm,
+                        transcription_provider: provider,
+                        transcription_model: defaultModel || aiForm.transcription_model,
+                      });
+                    }}
                     className="input"
                   >
                     <option value="elevenlabs">ElevenLabs (Scribe)</option>
                     <option value="openai">OpenAI (Whisper)</option>
-                    <option value="gemini">Google Gemini</option>
+                    {/* Legacy only: Gemini returns no word timestamps, so captions,
+                        tighten and music ducking degrade. Kept while the SAVED
+                        setting is still gemini (so a user can switch back before
+                        saving), or while it's the current form value. */}
+                    {(aiSettings?.transcription_provider === 'gemini' ||
+                      aiForm.transcription_provider === 'gemini') && (
+                      <option value="gemini">Google Gemini (legacy — no word timestamps)</option>
+                    )}
                   </select>
+                  {aiForm.transcription_provider === 'gemini' && (
+                    <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                      Gemini transcription has no word timestamps — captions, silence
+                      tightening and music ducking won&apos;t work. Switch to ElevenLabs
+                      or Whisper.
+                    </p>
+                  )}
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
@@ -344,7 +368,7 @@ export default function SettingsPage() {
                       setAiForm({ ...aiForm, transcription_model: e.target.value })
                     }
                     className="input"
-                    placeholder="e.g. scribe_v1, whisper-1, gemini-2.0-flash"
+                    placeholder="e.g. scribe_v1, whisper-1"
                   />
                 </div>
                 <div>

@@ -118,8 +118,11 @@ impl Default for AiSettings {
         Self {
             text_provider: "gemini".to_string(),
             text_model: "gemini-2.0-flash".to_string(),
-            transcription_provider: "gemini".to_string(),
-            transcription_model: "gemini-2.0-flash".to_string(),
+            // ElevenLabs Scribe is the standard transcription provider: it
+            // returns word-level timestamps, which captions, silence-tightening
+            // and music ducking all depend on (Gemini returns plain text only).
+            transcription_provider: "elevenlabs".to_string(),
+            transcription_model: "scribe_v1".to_string(),
             gemini_api_key: None,
             openai_api_key: None,
             anthropic_api_key: None,
