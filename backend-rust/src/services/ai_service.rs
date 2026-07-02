@@ -277,8 +277,10 @@ pub async fn generate_content(
     Ok(content)
 }
 
-/// YouTube copy for a long-form video: title options, description, tags, and
-/// thumbnail text ideas.
+/// Copy for a finished cut. For long-form videos only the YouTube fields are
+/// filled; short-form cuts also carry Instagram/TikTok captions and hashtags
+/// (the extra fields stay `None`/empty on long-form, and are skipped when
+/// serializing, so persisted long-form `copy_json` is unchanged).
 #[derive(Debug, Deserialize, serde::Serialize, Default, Clone)]
 pub struct YoutubeCopy {
     #[serde(default)]
@@ -289,6 +291,12 @@ pub struct YoutubeCopy {
     pub tags: Vec<String>,
     #[serde(default)]
     pub thumbnail_texts: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instagram_description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tiktok_description: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hashtags: Vec<String>,
 }
 
 /// Generate long-form YouTube copy (3 SEO titles, a description, tags, and
@@ -318,6 +326,44 @@ TRANSCRIPT:\n\"\"\"\n{}\n\"\"\"",
     copy.titles.truncate(3);
     copy.thumbnail_texts.truncate(5);
     copy.tags.truncate(25);
+    if copy.titles.is_empty() && copy.description.trim().is_empty() {
+        return Err("The model returned empty copy.".to_string());
+    }
+    Ok(copy)
+}
+
+/// Generate short-form copy (Shorts title options/description/tags plus
+/// Instagram & TikTok captions and hashtags) from the final cut's transcript.
+/// Same return shape as [`generate_youtube_copy`] so the edit row's `copy_json`
+/// and the copy panel handle both.
+pub async fn generate_short_copy(transcript: &str, ai: &AiSettings) -> Result<YoutubeCopy, String> {
+    let prompt = format!(
+        "You are a social media copywriter for SHORT-FORM vertical videos (YouTube Shorts, \
+Instagram Reels, TikTok). Based ONLY on the following video transcript, produce engaging, \
+SEO-optimized copy.\n\n\
+Return STRICT JSON (no markdown, no commentary) with exactly these keys:\n\
+- \"titles\": array of 3 punchy, SEO-optimized YouTube Shorts title options (each at most ~70 \
+characters, no hashtags)\n\
+- \"description\": a YouTube Shorts description with a strong hook and SEO keywords\n\
+- \"tags\": array of UP TO 15 SEO keyword tags for YouTube (plain keywords, no leading #)\n\
+- \"thumbnail_texts\": array of 3 short on-screen hook text ideas (max ~6 words each)\n\
+- \"instagram_description\": an Instagram Reels caption with a strong hook and SEO keywords\n\
+- \"tiktok_description\": a TikTok caption optimized for discovery\n\
+- \"hashtags\": array of UP TO 5 relevant, high-traffic hashtags (each starting with #)\n\n\
+Keep captions concise and native to each platform. Do not invent facts not in the transcript.\n\n\
+TRANSCRIPT:\n\"\"\"\n{}\n\"\"\"",
+        transcript
+    );
+
+    let raw = complete(&prompt, ai, 2048).await?;
+    let json = extract_json(&raw);
+    let mut copy: YoutubeCopy = serde_json::from_str(json)
+        .map_err(|e| format!("Failed to parse copy JSON: {} — raw: {}", e, raw))?;
+
+    copy.titles.truncate(3);
+    copy.thumbnail_texts.truncate(3);
+    copy.tags.truncate(15);
+    copy.hashtags.truncate(5);
     if copy.titles.is_empty() && copy.description.trim().is_empty() {
         return Err("The model returned empty copy.".to_string());
     }

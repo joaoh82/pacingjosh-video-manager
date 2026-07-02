@@ -6,12 +6,14 @@ import {
   getStreamUrl,
   updateVideo,
   getProductions,
+  createProduction,
   openVideoFolder,
   isTauri,
   getAiGeneration,
   generateAiContent,
 } from '@/lib/api';
 import { format } from 'date-fns';
+import VideoEditPipeline from './VideoEditPipeline';
 
 interface VideoModalProps {
   video: Video;
@@ -38,6 +40,11 @@ export default function VideoModal({
   const [aiError, setAiError] = useState<string | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [transcriptOpen, setTranscriptOpen] = useState(false);
+
+  // "Create Short" — a short-form production wrapping this take, opened in the
+  // edit pipeline (captions, cleanup cut, overlays, timeline).
+  const [shortProd, setShortProd] = useState<Production | null>(null);
+  const [creatingShort, setCreatingShort] = useState(false);
   const [formData, setFormData] = useState({
     category: video.metadata?.category || '',
     location: video.metadata?.location || '',
@@ -109,6 +116,54 @@ export default function VideoModal({
     }
   };
 
+  /**
+   * Open this take in the short-form edit pipeline. Reuses a short-form
+   * production the video is already linked to, otherwise creates one named
+   * after the file and links the video to it.
+   */
+  const handleCreateShort = async () => {
+    setCreatingShort(true);
+    setAiError(null);
+    try {
+      // Fetch fresh — the state copy may still be loading when the button is
+      // clicked, which would miss an existing short and create a duplicate.
+      const productions = await getProductions();
+      setAllProductions(productions);
+
+      const linkedIds = (currentVideo.productions || []).map((p) => p.id);
+      const existing = productions.find(
+        (p) => p.production_type === 'short' && linkedIds.includes(p.id)
+      );
+      if (existing) {
+        setShortProd(existing);
+        return;
+      }
+
+      const base = currentVideo.filename.replace(/\.[^.]+$/, '');
+      const titles = new Set(productions.map((p) => p.title));
+      let title = base;
+      for (let i = 2; titles.has(title); i++) title = `${base} (${i})`;
+
+      const prod = await createProduction({
+        title,
+        platform: null,
+        link: null,
+        is_published: false,
+        production_type: 'short',
+        published_at: null,
+      });
+      await updateVideo(currentVideo.id, { production_ids: [...linkedIds, prod.id] });
+      setAllProductions((list) => [...list, prod]);
+      setCurrentVideo((v) => ({ ...v, productions: [...(v.productions || []), prod] }));
+      setShortProd(prod);
+      onUpdate?.();
+    } catch (e: any) {
+      setAiError(e.message || 'Failed to create the short-form production');
+    } finally {
+      setCreatingShort(false);
+    }
+  };
+
   const formatFileSize = (bytes?: number | null) => {
     if (!bytes) return 'Unknown';
     const units = ['B', 'KB', 'MB', 'GB'];
@@ -168,6 +223,7 @@ export default function VideoModal({
   };
 
   return (
+    <>
     <div className="fixed inset-0 z-50 overflow-y-auto">
       {/* Backdrop */}
       <div
@@ -484,17 +540,27 @@ export default function VideoModal({
                       )}
                     </p>
                   </div>
-                  <button
-                    onClick={() => handleGenerate(!!aiGen)}
-                    disabled={aiLoading}
-                    className="btn btn-primary text-sm whitespace-nowrap"
-                  >
-                    {aiLoading
-                      ? 'Generating…'
-                      : aiGen
-                      ? 'Regenerate'
-                      : 'Generate from transcript'}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handleCreateShort}
+                      disabled={creatingShort}
+                      className="btn btn-secondary text-sm whitespace-nowrap"
+                      title="Open this take in the edit pipeline: cleanup cut, captions, overlays, timeline."
+                    >
+                      {creatingShort ? 'Opening…' : '✂️ Create Short'}
+                    </button>
+                    <button
+                      onClick={() => handleGenerate(!!aiGen)}
+                      disabled={aiLoading}
+                      className="btn btn-primary text-sm whitespace-nowrap"
+                    >
+                      {aiLoading
+                        ? 'Generating…'
+                        : aiGen
+                        ? 'Regenerate'
+                        : 'Generate from transcript'}
+                    </button>
+                  </div>
                 </div>
 
                 {aiLoading && (
@@ -658,5 +724,13 @@ export default function VideoModal({
         </div>
       </div>
     </div>
+
+    {/* Short-form edit pipeline, opened from "Create Short" */}
+    <VideoEditPipeline
+      isOpen={!!shortProd}
+      production={shortProd}
+      onClose={() => setShortProd(null)}
+    />
+    </>
   );
 }

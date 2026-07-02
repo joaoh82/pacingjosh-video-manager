@@ -36,6 +36,13 @@ pub struct AiSettings {
     /// at run time. Defaults via serde so older configs still load.
     #[serde(default = "default_edit_prompt")]
     pub edit_prompt: String,
+    /// Planning prompt used when a (usually short-form) edit is started WITHOUT
+    /// a script: the transcript itself is the script and the job is cleanup —
+    /// cut false starts, repeated sentences, filler, dead air. Editable by the
+    /// user; `{transcripts}` is replaced at run time. Defaults via serde so
+    /// older configs still load.
+    #[serde(default = "default_short_edit_prompt")]
+    pub short_edit_prompt: String,
     /// Provider used for AI thumbnail restyling: "gemini" | "openai". Defaults
     /// via serde so configs written before this field existed still load.
     #[serde(default = "default_image_provider")]
@@ -113,6 +120,42 @@ SCRIPT:\n\"\"\"\n{script}\n\"\"\"\n\n\
 RAW TAKES (with word-level timestamps):\n\"\"\"\n{transcripts}\n\"\"\"".to_string()
 }
 
+/// The default script-less ("clean up this take") planning prompt, used mainly
+/// for short-form videos recorded in one go. Exposed so the API can offer a
+/// "reset to default" affordance and so older configs can backfill it.
+pub fn default_short_edit_prompt() -> String {
+    "You are a meticulous short-form video editor. You are given one or more RAW TAKES of a \
+video recorded in one session — usually a single take shot start-to-finish. For every take you \
+get its video_id, filename, duration, and a transcript with word-level timestamps (in seconds).\n\n\
+There is NO script: the spoken content itself is the script. Your job is to assemble an edit \
+decision list (EDL) that keeps the good delivery and cuts the garbage, preserving the creator's \
+message and order.\n\n\
+Guidelines:\n\
+- Cut FALSE STARTS: when the creator stops mid-sentence and starts the same thought again, keep \
+only the final, complete delivery.\n\
+- Cut REPEATED CONTENT: if the same line or idea is delivered more than once, keep the best \
+(usually the last) version and drop the rest.\n\
+- Cut warm-ups, filler words (\"um\", \"uh\"), long pauses, restarts, and out-of-content chatter \
+(e.g. talking to someone off camera, checking the phone).\n\
+- Keep everything else — do NOT summarize or reorder the content; the result must flow naturally \
+start to finish.\n\
+- Prefer fewer, longer clips with clean cut points at sentence boundaries over many micro-cuts.\n\
+- `start` and `end` are in seconds and MUST fall within that take's duration, with end > start.\n\n\
+Return STRICT JSON (no markdown, no commentary) with exactly this shape:\n\
+{\n\
+  \"scenes\": [\n\
+    {\n\
+      \"scene_number\": 1,\n\
+      \"scene_description\": \"short label for this part\",\n\
+      \"clips\": [\n\
+        { \"video_id\": 12, \"start\": 2.4, \"end\": 11.0, \"reason\": \"why this range\" }\n\
+      ]\n\
+    }\n\
+  ]\n\
+}\n\n\
+RAW TAKES (with word-level timestamps):\n\"\"\"\n{transcripts}\n\"\"\"".to_string()
+}
+
 impl Default for AiSettings {
     fn default() -> Self {
         Self {
@@ -129,6 +172,7 @@ impl Default for AiSettings {
             elevenlabs_api_key: None,
             system_prompt: default_system_prompt(),
             edit_prompt: default_edit_prompt(),
+            short_edit_prompt: default_short_edit_prompt(),
             image_provider: default_image_provider(),
             image_model: default_image_model(),
         }

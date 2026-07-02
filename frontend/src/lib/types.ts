@@ -99,6 +99,10 @@ export interface AiSettings {
   edit_prompt: string;
   /** The built-in default edit prompt, for offering a "reset to default". */
   default_edit_prompt: string;
+  /** The editable script-less (short-form cleanup) planning prompt in use. */
+  short_edit_prompt: string;
+  /** The built-in default short-form prompt, for "reset to default". */
+  default_short_edit_prompt: string;
 }
 
 /** Payload for saving AI settings. Blank/omitted keys are left unchanged. */
@@ -117,6 +121,8 @@ export interface AiSettingsUpdate {
   system_prompt?: string;
   /** Omitted leaves it unchanged; an empty string resets it to the default. */
   edit_prompt?: string;
+  /** Omitted leaves it unchanged; an empty string resets it to the default. */
+  short_edit_prompt?: string;
 }
 
 /** AI-generated content for a single (portrait) video. */
@@ -290,12 +296,16 @@ export interface EditJobStatus {
   end_time?: string | null;
 }
 
-/** Generated long-form YouTube copy for a finished run. */
+/** Generated copy for a finished run. Long-form runs fill only the YouTube
+ * fields; short-form runs also carry Reels/TikTok captions and hashtags. */
 export interface YoutubeCopy {
   titles: string[];
   description: string;
   tags: string[];
   thumbnail_texts: string[];
+  instagram_description?: string | null;
+  tiktok_description?: string | null;
+  hashtags?: string[];
 }
 
 /** A persisted edit result for a production. */

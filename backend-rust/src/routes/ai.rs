@@ -2,7 +2,7 @@ use actix_web::{get, post, put, web, HttpResponse};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-use crate::config::{default_edit_prompt, default_system_prompt, ConfigManager};
+use crate::config::{default_edit_prompt, default_short_edit_prompt, default_system_prompt, ConfigManager};
 use crate::db::DbPool;
 use crate::models::AiGenerationResponse;
 use crate::services::{ai_service, ffmpeg_service, video_service};
@@ -27,6 +27,8 @@ async fn get_ai_settings(config: web::Data<ConfigManager>) -> HttpResponse {
         "default_system_prompt": default_system_prompt(),
         "edit_prompt": ai.edit_prompt,
         "default_edit_prompt": default_edit_prompt(),
+        "short_edit_prompt": ai.short_edit_prompt,
+        "default_short_edit_prompt": default_short_edit_prompt(),
     }))
 }
 
@@ -53,6 +55,9 @@ pub struct AiSettingsRequest {
     /// Video-edit planning prompt. Omitted leaves it unchanged; an empty string
     /// resets it to the built-in default.
     pub edit_prompt: Option<String>,
+    /// Script-less (short-form cleanup) planning prompt. Omitted leaves it
+    /// unchanged; an empty string resets it to the built-in default.
+    pub short_edit_prompt: Option<String>,
 }
 
 #[put("/ai/settings")]
@@ -86,6 +91,13 @@ async fn save_ai_settings(
     if let Some(p) = &body.edit_prompt {
         ai.edit_prompt = if p.trim().is_empty() {
             default_edit_prompt()
+        } else {
+            p.clone()
+        };
+    }
+    if let Some(p) = &body.short_edit_prompt {
+        ai.short_edit_prompt = if p.trim().is_empty() {
+            default_short_edit_prompt()
         } else {
             p.clone()
         };
