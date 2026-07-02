@@ -126,6 +126,9 @@ export default function ProductionManager({
   function handlePublishedChange(published: boolean) {
     setFormPublished(published);
     if (published && !formPublishedAt) setFormPublishedAt(todayStr());
+    // Unpublishing clears the date — otherwise the hidden input's stale value
+    // would be sent as an explicit date and survive in the DB.
+    if (!published) setFormPublishedAt('');
   }
 
   async function handleSave() {
