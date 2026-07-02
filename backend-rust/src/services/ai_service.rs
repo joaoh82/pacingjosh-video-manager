@@ -361,7 +361,7 @@ TRANSCRIPT:\n\"\"\"\n{}\n\"\"\"",
         .map_err(|e| format!("Failed to parse copy JSON: {} — raw: {}", e, raw))?;
 
     copy.titles.truncate(3);
-    copy.thumbnail_texts.truncate(5);
+    copy.thumbnail_texts.truncate(3);
     copy.tags.truncate(15);
     copy.hashtags.truncate(5);
     if copy.titles.is_empty() && copy.description.trim().is_empty() {

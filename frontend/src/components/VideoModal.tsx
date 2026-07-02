@@ -125,8 +125,13 @@ export default function VideoModal({
     setCreatingShort(true);
     setAiError(null);
     try {
+      // Fetch fresh — the state copy may still be loading when the button is
+      // clicked, which would miss an existing short and create a duplicate.
+      const productions = await getProductions();
+      setAllProductions(productions);
+
       const linkedIds = (currentVideo.productions || []).map((p) => p.id);
-      const existing = allProductions.find(
+      const existing = productions.find(
         (p) => p.production_type === 'short' && linkedIds.includes(p.id)
       );
       if (existing) {
@@ -135,7 +140,7 @@ export default function VideoModal({
       }
 
       const base = currentVideo.filename.replace(/\.[^.]+$/, '');
-      const titles = new Set(allProductions.map((p) => p.title));
+      const titles = new Set(productions.map((p) => p.title));
       let title = base;
       for (let i = 2; titles.has(title); i++) title = `${base} (${i})`;
 
