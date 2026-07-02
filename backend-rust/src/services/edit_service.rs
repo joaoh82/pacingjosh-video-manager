@@ -308,8 +308,10 @@ pub fn start_edit(
     if videos.is_empty() {
         return Err("This production has no videos. Add the raw takes to it first.".to_string());
     }
-    if opts.script.trim().is_empty() {
-        return Err("A script is required to plan the edit.".to_string());
+    // Short-form productions may skip the script: the transcript becomes the
+    // script and the LLM plans a cleanup cut (false starts, repeats, filler).
+    if opts.script.trim().is_empty() && production.production_type != "short" {
+        return Err("A script is required to plan the edit. (Short-form productions may leave it empty.)".to_string());
     }
     if opts.output_dir.as_deref().map(str::trim).unwrap_or("").is_empty() {
         return Err("Choose an output folder for the final video.".to_string());
@@ -838,7 +840,15 @@ fn run_edit_inner(
     set_stage(edit_map, job_id, "planning", &format!("Asking {} to assemble the edit…", ai.text_provider));
 
     let transcripts_block = format_transcripts(takes, &transcripts, &plain_texts);
-    let prompt = build_edit_prompt(&ai.edit_prompt, script, instructions, &transcripts_block);
+    // No script (short-form) → the cleanup prompt: the transcript is the script
+    // and the job is cutting false starts, repeats, filler and dead air.
+    let template = if script.trim().is_empty() {
+        log_msg(edit_map, job_id, "No script provided — planning a cleanup cut from the transcript.");
+        &ai.short_edit_prompt
+    } else {
+        &ai.edit_prompt
+    };
+    let prompt = build_edit_prompt(template, script, instructions, &transcripts_block);
 
     let raw = rt
         .block_on(ai_service::complete(&prompt, ai, 8192))

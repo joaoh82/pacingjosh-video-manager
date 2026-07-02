@@ -243,8 +243,12 @@ export default function VideoEditPipeline({
 
   if (!isOpen || !production) return null;
 
+  // Short-form productions may run script-less: the transcript becomes the
+  // script and the backend plans a cleanup cut (false starts, repeats, filler).
+  const isShort = production.production_type === 'short';
+
   const handleRun = async () => {
-    if (!script.trim()) {
+    if (!script.trim() && !isShort) {
       setError('Paste the script for this video first.');
       return;
     }
@@ -525,14 +529,21 @@ export default function VideoEditPipeline({
                 /* ---------- New run form ---------- */
                 <div className="space-y-4">
                   <p className="text-sm text-gray-600 dark:text-gray-400">
-                    Transcribes every take, assembles the best cut from your script, writes an edit
-                    decision list, and stitches the final clip. Configure API keys/prompts under{' '}
+                    {isShort
+                      ? 'Transcribes the take(s) and cuts false starts, repeated content, filler and dead air into a clean short. Add a script only if you want the cut to follow one.'
+                      : 'Transcribes every take, assembles the best cut from your script, writes an edit decision list, and stitches the final clip.'}{' '}
+                    Configure API keys/prompts under{' '}
                     <span className="font-medium">Settings → AI / LLM</span>.
                   </p>
 
                   <div>
                     <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                      Script <span className="text-red-500">*</span>
+                      Script{' '}
+                      {isShort ? (
+                        <span className="text-gray-400 font-normal">(optional)</span>
+                      ) : (
+                        <span className="text-red-500">*</span>
+                      )}
                     </label>
                     <textarea
                       value={script}
@@ -540,7 +551,11 @@ export default function VideoEditPipeline({
                       rows={7}
                       disabled={running}
                       className="input font-mono text-xs leading-relaxed"
-                      placeholder="Paste the script (Markdown is fine). Scene breaks help the editor align takes."
+                      placeholder={
+                        isShort
+                          ? 'Leave empty to auto-clean the take (remove false starts, repeats, filler) — or paste a script to cut against.'
+                          : 'Paste the script (Markdown is fine). Scene breaks help the editor align takes.'
+                      }
                     />
                   </div>
 
@@ -987,6 +1002,7 @@ export default function VideoEditPipeline({
                     onRerender={handleRerender}
                     busy={running}
                     takeDurations={takeDurations}
+                    isShort={isShort}
                   />
                 )
               )}
@@ -1004,12 +1020,14 @@ function EditDetail({
   onRerender,
   busy,
   takeDurations,
+  isShort,
 }: {
   edit: ProductionEdit;
   onDeleted: () => void;
   onRerender: (editId: number, edits: TimelineEdits) => void;
   busy: boolean;
   takeDurations: Record<number, number>;
+  isShort: boolean;
 }) {
   const [scriptOpen, setScriptOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -1139,14 +1157,18 @@ function EditDetail({
         />
       )}
 
-      {/* YouTube copy (completed runs) */}
+      {/* Copy for the finished cut (completed runs) */}
       {edit.status === 'completed' && (
         <div className="card">
           <div className="flex items-center justify-between gap-3 mb-2">
             <div>
-              <h3 className="font-semibold text-gray-900 dark:text-white">YouTube copy</h3>
+              <h3 className="font-semibold text-gray-900 dark:text-white">
+                {isShort ? 'Social copy' : 'YouTube copy'}
+              </h3>
               <p className="text-xs text-gray-500 dark:text-gray-400">
-                Title options, description, tags &amp; thumbnail text from the final cut&apos;s transcript.
+                {isShort
+                  ? 'Shorts titles, Reels & TikTok captions, tags & hashtags from the final cut’s transcript.'
+                  : 'Title options, description, tags & thumbnail text from the final cut’s transcript.'}
               </p>
             </div>
             <button
@@ -1206,6 +1228,61 @@ function EditDetail({
                   <p className="text-sm text-gray-900 dark:text-white whitespace-pre-wrap bg-gray-50 dark:bg-gray-700/50 rounded px-3 py-2">
                     {copy.description}
                   </p>
+                </div>
+              )}
+
+              {copy.instagram_description && (
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Instagram Reels caption</span>
+                    <button
+                      onClick={() => toClipboard('ig', copy.instagram_description!)}
+                      className="text-xs text-primary-600 dark:text-primary-400 hover:underline"
+                    >
+                      {copiedKey === 'ig' ? 'Copied!' : 'Copy'}
+                    </button>
+                  </div>
+                  <p className="text-sm text-gray-900 dark:text-white whitespace-pre-wrap bg-gray-50 dark:bg-gray-700/50 rounded px-3 py-2">
+                    {copy.instagram_description}
+                  </p>
+                </div>
+              )}
+
+              {copy.tiktok_description && (
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-sm font-medium text-gray-600 dark:text-gray-400">TikTok caption</span>
+                    <button
+                      onClick={() => toClipboard('tt', copy.tiktok_description!)}
+                      className="text-xs text-primary-600 dark:text-primary-400 hover:underline"
+                    >
+                      {copiedKey === 'tt' ? 'Copied!' : 'Copy'}
+                    </button>
+                  </div>
+                  <p className="text-sm text-gray-900 dark:text-white whitespace-pre-wrap bg-gray-50 dark:bg-gray-700/50 rounded px-3 py-2">
+                    {copy.tiktok_description}
+                  </p>
+                </div>
+              )}
+
+              {(copy.hashtags?.length ?? 0) > 0 && (
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Hashtags</span>
+                    <button
+                      onClick={() => toClipboard('hashtags', (copy.hashtags ?? []).join(' '))}
+                      className="text-xs text-primary-600 dark:text-primary-400 hover:underline"
+                    >
+                      {copiedKey === 'hashtags' ? 'Copied!' : 'Copy all'}
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {(copy.hashtags ?? []).map((t, i) => (
+                      <span key={i} className="badge bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-200 text-xs">
+                        {t}
+                      </span>
+                    ))}
+                  </div>
                 </div>
               )}
 

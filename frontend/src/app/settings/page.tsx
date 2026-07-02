@@ -62,6 +62,7 @@ export default function SettingsPage() {
           image_model: ai.image_model,
           system_prompt: ai.system_prompt,
           edit_prompt: ai.edit_prompt,
+          short_edit_prompt: ai.short_edit_prompt,
         });
       } catch {
         // AI settings are optional; ignore load failures.
@@ -493,6 +494,44 @@ export default function SettingsPage() {
                 <textarea
                   value={aiForm.edit_prompt ?? ''}
                   onChange={(e) => setAiForm({ ...aiForm, edit_prompt: e.target.value })}
+                  rows={14}
+                  spellCheck={false}
+                  className="input font-mono text-xs leading-relaxed"
+                  placeholder="Loading prompt…"
+                />
+              </div>
+
+              {/* Editable short-form (script-less) cleanup prompt */}
+              <div className="mt-6">
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Short-form cleanup prompt
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      aiSettings &&
+                      setAiForm({ ...aiForm, short_edit_prompt: aiSettings.default_short_edit_prompt })
+                    }
+                    disabled={
+                      !aiSettings || aiForm.short_edit_prompt === aiSettings.default_short_edit_prompt
+                    }
+                    className="text-xs text-primary-600 dark:text-primary-400 hover:underline disabled:opacity-40 disabled:no-underline"
+                  >
+                    Reset to default
+                  </button>
+                </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+                  Used when an edit is started <em>without</em> a script (typical for short-form,
+                  single-take videos): the transcript is the script and the model plans a cleanup
+                  cut — false starts, repeated content, filler, dead air. Use{' '}
+                  <code className="px-1 bg-gray-100 dark:bg-gray-700 rounded">{'{transcripts}'}</code>{' '}
+                  where the timestamped transcripts should be inserted. Same JSON output contract
+                  as the pipeline prompt above.
+                </p>
+                <textarea
+                  value={aiForm.short_edit_prompt ?? ''}
+                  onChange={(e) => setAiForm({ ...aiForm, short_edit_prompt: e.target.value })}
                   rows={14}
                   spellCheck={false}
                   className="input font-mono text-xs leading-relaxed"

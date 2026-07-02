@@ -464,8 +464,22 @@ async fn generate_copy(
         }));
     }
 
+    // Short-form productions get Shorts/Reels/TikTok copy; long-form gets the
+    // YouTube long-form set. Same JSON shape either way.
+    let is_short = {
+        let mut conn = pool.get().expect("Failed to get DB connection");
+        crate::services::production_service::get_production(&mut conn, edit.production_id)
+            .map(|p| p.production_type == "short")
+            .unwrap_or(false)
+    };
+
     let ai = config.get_ai_settings();
-    let copy = match ai_service::generate_youtube_copy(&transcript, &ai).await {
+    let copy = if is_short {
+        ai_service::generate_short_copy(&transcript, &ai).await
+    } else {
+        ai_service::generate_youtube_copy(&transcript, &ai).await
+    };
+    let copy = match copy {
         Ok(c) => c,
         Err(e) => {
             return HttpResponse::InternalServerError().json(serde_json::json!({ "detail": e }))

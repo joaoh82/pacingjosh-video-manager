@@ -393,11 +393,15 @@ pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps={fps}",
         fps = fps
     );
     // Burn in captions last so they're sized relative to the final frame.
+    // Portrait (shorts) frames get the platform-native look: bold text and a
+    // higher bottom margin so the captions clear the Reels/Shorts/TikTok UI.
     if let Some(name) = subtitle_name {
-        vf.push_str(&format!(
-            ",subtitles={}:force_style='Fontsize=18,Outline=1,Shadow=0,MarginV=40'",
-            name
-        ));
+        let style = if h > w {
+            "Fontsize=16,Bold=1,Outline=1,Shadow=0,MarginV=110"
+        } else {
+            "Fontsize=18,Outline=1,Shadow=0,MarginV=40"
+        };
+        vf.push_str(&format!(",subtitles={}:force_style='{}'", name, style));
     }
 
     let mut cmd = ffmpeg_cmd();
