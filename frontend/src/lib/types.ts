@@ -32,12 +32,16 @@ export interface TagWithCount {
   count: number;
 }
 
+export type ProductionType = 'long' | 'short';
+
 export interface Production {
   id: number;
   title: string;
   platform?: string | null;
   link?: string | null;
   is_published: boolean;
+  production_type: ProductionType;
+  published_at?: string | null;
   video_count?: number;
 }
 

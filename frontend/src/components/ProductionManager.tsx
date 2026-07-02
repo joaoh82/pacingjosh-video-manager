@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Production } from '@/lib/types';
+import { Production, ProductionType } from '@/lib/types';
 import {
   getProductions,
   createProduction,
@@ -11,7 +11,37 @@ import {
 } from '@/lib/api';
 import VideoEditPipeline from './VideoEditPipeline';
 
-const PLATFORM_OPTIONS = ['YouTube', 'TikTok', 'Instagram', 'Facebook', 'Twitter/X', 'Vimeo', 'Other'];
+const PLATFORM_OPTIONS = [
+  'YouTube',
+  'YouTube Shorts',
+  'Instagram Reels',
+  'TikTok',
+  'Instagram',
+  'Facebook',
+  'Twitter/X',
+  'Vimeo',
+  'Other',
+];
+
+// Platforms that unambiguously imply a production type — picking one
+// auto-selects the type (still overridable via the type dropdown).
+const PLATFORM_TYPE: Record<string, ProductionType> = {
+  'YouTube': 'long',
+  'YouTube Shorts': 'short',
+  'Instagram Reels': 'short',
+  'TikTok': 'short',
+  'Vimeo': 'long',
+};
+
+/** Today as a local "YYYY-MM-DD" string (en-CA locale formats exactly that). */
+function todayStr(): string {
+  return new Date().toLocaleDateString('en-CA');
+}
+
+/** Date part of a stored publish timestamp, for the date input and display. */
+function dateOnly(publishedAt?: string | null): string {
+  return (publishedAt || '').slice(0, 10);
+}
 
 interface ProductionManagerProps {
   isOpen: boolean;
@@ -32,6 +62,8 @@ export default function ProductionManager({
   const [formPlatform, setFormPlatform] = useState('');
   const [formLink, setFormLink] = useState('');
   const [formPublished, setFormPublished] = useState(false);
+  const [formType, setFormType] = useState<ProductionType>('long');
+  const [formPublishedAt, setFormPublishedAt] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editingProd, setEditingProd] = useState<Production | null>(null);
@@ -69,6 +101,8 @@ export default function ProductionManager({
     setFormPlatform('');
     setFormLink('');
     setFormPublished(false);
+    setFormType('long');
+    setFormPublishedAt('');
     setError(null);
   }
 
@@ -78,7 +112,20 @@ export default function ProductionManager({
     setFormPlatform(prod.platform || '');
     setFormLink(prod.link || '');
     setFormPublished(prod.is_published);
+    setFormType(prod.production_type === 'short' ? 'short' : 'long');
+    setFormPublishedAt(dateOnly(prod.published_at));
     setError(null);
+  }
+
+  function handlePlatformChange(platform: string) {
+    setFormPlatform(platform);
+    const implied = PLATFORM_TYPE[platform];
+    if (implied) setFormType(implied);
+  }
+
+  function handlePublishedChange(published: boolean) {
+    setFormPublished(published);
+    if (published && !formPublishedAt) setFormPublishedAt(todayStr());
   }
 
   async function handleSave() {
@@ -95,6 +142,8 @@ export default function ProductionManager({
         platform: formPlatform.trim() || null,
         link: formLink.trim() || null,
         is_published: formPublished,
+        production_type: formType,
+        published_at: formPublishedAt || null,
       };
       if (editingId !== null) {
         await updateProduction(editingId, payload);
@@ -182,13 +231,24 @@ export default function ProductionManager({
                 />
                 <select
                   value={formPlatform}
-                  onChange={(e) => setFormPlatform(e.target.value)}
+                  onChange={(e) => handlePlatformChange(e.target.value)}
                   className="input"
                 >
                   <option value="">Platform (optional)</option>
                   {PLATFORM_OPTIONS.map((p) => (
                     <option key={p} value={p}>{p}</option>
                   ))}
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <select
+                  value={formType}
+                  onChange={(e) => setFormType(e.target.value as ProductionType)}
+                  className="input"
+                  title="Production type"
+                >
+                  <option value="long">Long-form</option>
+                  <option value="short">Short-form</option>
                 </select>
               </div>
               <input
@@ -198,15 +258,28 @@ export default function ProductionManager({
                 className="input"
                 placeholder="Link (optional) - https://..."
               />
-              <label className="flex items-center space-x-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={formPublished}
-                  onChange={(e) => setFormPublished(e.target.checked)}
-                  className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                />
-                <span className="text-sm text-gray-700 dark:text-gray-300">Published</span>
-              </label>
+              <div className="flex items-center gap-4">
+                <label className="flex items-center space-x-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formPublished}
+                    onChange={(e) => handlePublishedChange(e.target.checked)}
+                    className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                  />
+                  <span className="text-sm text-gray-700 dark:text-gray-300">Published</span>
+                </label>
+                {formPublished && (
+                  <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                    <span>on</span>
+                    <input
+                      type="date"
+                      value={formPublishedAt}
+                      onChange={(e) => setFormPublishedAt(e.target.value)}
+                      className="input py-1"
+                    />
+                  </label>
+                )}
+              </div>
               <div className="flex gap-2">
                 <button
                   onClick={handleSave}
@@ -258,6 +331,15 @@ export default function ProductionManager({
                         <span className="font-medium text-gray-900 dark:text-white truncate">
                           {prod.title}
                         </span>
+                        <span
+                          className={`text-xs px-1.5 py-0.5 rounded flex-shrink-0 ${
+                            prod.production_type === 'short'
+                              ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-400'
+                              : 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400'
+                          }`}
+                        >
+                          {prod.production_type === 'short' ? 'Short-form' : 'Long-form'}
+                        </span>
                         {prod.platform && (
                           <span className="text-xs px-1.5 py-0.5 rounded bg-gray-200 dark:bg-gray-600 text-gray-600 dark:text-gray-300 flex-shrink-0">
                             {prod.platform}
@@ -265,7 +347,7 @@ export default function ProductionManager({
                         )}
                         {prod.is_published ? (
                           <span className="text-xs px-1.5 py-0.5 rounded bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400 flex-shrink-0">
-                            Published
+                            Published{dateOnly(prod.published_at) ? ` ${dateOnly(prod.published_at)}` : ''}
                           </span>
                         ) : (
                           <span className="text-xs px-1.5 py-0.5 rounded bg-yellow-100 dark:bg-yellow-900/40 text-yellow-700 dark:text-yellow-400 flex-shrink-0">

@@ -46,6 +46,8 @@ diesel::table! {
         platform -> Nullable<Text>,
         link -> Nullable<Text>,
         is_published -> Bool,
+        production_type -> Text,
+        published_at -> Nullable<Timestamp>,
     }
 }
 
