@@ -261,6 +261,9 @@ export interface ProductionPayload {
   platform?: string | null;
   link?: string | null;
   is_published: boolean;
+  production_type: 'long' | 'short';
+  /** "YYYY-MM-DD" (or full ISO datetime); null clears it. */
+  published_at?: string | null;
 }
 
 export async function createProduction(data: ProductionPayload): Promise<Production> {
