@@ -1,6 +1,6 @@
 [package]
 name = "video-manager-tauri"
-version = "1.5.1"
+version = "1.6.0"
 edition = "2021"
 description = "Video Manager desktop shell (Tauri 2.0)"
 
