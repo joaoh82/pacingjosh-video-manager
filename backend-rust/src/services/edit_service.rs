@@ -2559,6 +2559,73 @@ mod tests {
     }
 
     #[test]
+    fn materialize_text_overlay_writes_png_and_clears_blob() {
+        let map: EditJobMap = Arc::new(Mutex::new(HashMap::new()));
+        let dir = std::env::temp_dir().join("vman-test-materialize-overlays");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // A text overlay carrying an inline data-URL blob, plus an image overlay
+        // that must pass through untouched.
+        let mut specs: Vec<OverlaySpec> = vec![
+            serde_json::from_value(serde_json::json!({
+                "kind": "text",
+                "image_data": "data:image/png;base64,aGVsbG8=", // "hello"
+                "text_spec": { "text": "Hi" }
+            }))
+            .unwrap(),
+            serde_json::from_value(serde_json::json!({
+                "path": "C:/some/keeper.gif",
+                "kind": "image"
+            }))
+            .unwrap(),
+        ];
+
+        materialize_text_overlays(&mut specs, &dir, &map, "job");
+
+        // Text overlay: blob written to a file, path pointed at it, blob cleared.
+        let written = dir.join(".overlays").join("text-0.png");
+        assert!(written.is_file());
+        assert_eq!(std::fs::read(&written).unwrap(), b"hello");
+        assert_eq!(specs[0].path, written.to_string_lossy());
+        assert!(specs[0].image_data.is_none());
+
+        // Image overlay untouched.
+        assert_eq!(specs[1].path, "C:/some/keeper.gif");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn overlays_json_echoes_kind_and_text_spec() {
+        let specs: Vec<OverlaySpec> = vec![serde_json::from_value(serde_json::json!({
+            "path": "/x/text-0.png",
+            "kind": "text",
+            "text_spec": { "text": "Watch this", "fontSize": 96 }
+        }))
+        .unwrap()];
+        let placements = vec![ffmpeg_service::OverlayPlacement {
+            path: std::path::PathBuf::from("/x/text-0.png"),
+            start: 2.0,
+            duration: 3.0,
+            chroma_color: String::new(),
+            similarity: 0.1,
+            blend: 0.05,
+            scale: 1.0,
+            opacity: 1.0,
+            position: "center".to_string(),
+        }];
+
+        let json = overlays_to_json(&specs, &placements);
+        assert_eq!(json.len(), 1);
+        assert_eq!(json[0]["kind"], "text");
+        assert_eq!(json[0]["text_spec"]["text"], "Watch this");
+        assert_eq!(json[0]["text_spec"]["fontSize"], 96);
+        assert_eq!(json[0]["start"], 2.0);
+        assert_eq!(json[0]["end"], 5.0);
+    }
+
+    #[test]
     fn parse_plan_drops_unknown_orders_and_clamps_ranges() {
         let clips = vec![serde_json::json!({
             "order": 1, "video_id": 5, "start": 0.0, "end": 10.0
