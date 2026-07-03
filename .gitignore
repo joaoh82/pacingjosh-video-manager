@@ -41,6 +41,10 @@ venv.bak/
 .AppleDouble
 .LSOverride
 
+# frontend/src/lib is real TypeScript source — re-include it (the Python `lib/`
+# rule above is unanchored and would otherwise ignore new files added here).
+!frontend/src/lib/
+
 # Node
 node_modules/
 npm-debug.log*

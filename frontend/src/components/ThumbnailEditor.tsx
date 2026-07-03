@@ -9,22 +9,12 @@ import {
   saveEditThumbnail,
 } from '@/lib/api';
 import type { ThumbnailSpec, ThumbnailTextStyle } from '@/lib/types';
+import { DEFAULT_TEXT_STYLE, drawStyledText } from '@/lib/styledText';
 
 const W = 1280;
 const H = 720;
 
 type Align = 'left' | 'center' | 'right';
-
-const DEFAULT_STYLE: ThumbnailTextStyle = {
-  fill: '#ffffff',
-  gradient: null,
-  outlineColor: '#000000',
-  outlineWidth: 10,
-  shadowColor: '#000000',
-  shadowBlur: 0,
-  shadowOffsetY: 0,
-  highlight: null,
-};
 
 interface ThumbnailEditorProps {
   editId: number;
@@ -41,47 +31,6 @@ interface ThumbnailEditorProps {
 
 function clamp(v: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, v));
-}
-
-function wrapLines(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
-  const out: string[] = [];
-  for (const para of text.split('\n')) {
-    const words = para.split(/\s+/).filter(Boolean);
-    if (words.length === 0) {
-      out.push('');
-      continue;
-    }
-    let line = words[0];
-    for (let i = 1; i < words.length; i++) {
-      const test = `${line} ${words[i]}`;
-      if (ctx.measureText(test).width > maxWidth) {
-        out.push(line);
-        line = words[i];
-      } else {
-        line = test;
-      }
-    }
-    out.push(line);
-  }
-  return out;
-}
-
-function roundRectPath(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  r: number
-) {
-  const rr = Math.max(0, Math.min(r, w / 2, h / 2));
-  ctx.beginPath();
-  ctx.moveTo(x + rr, y);
-  ctx.arcTo(x + w, y, x + w, y + h, rr);
-  ctx.arcTo(x + w, y + h, x, y + h, rr);
-  ctx.arcTo(x, y + h, x, y, rr);
-  ctx.arcTo(x, y, x + w, y, rr);
-  ctx.closePath();
 }
 
 /** Render the background still (cover-fit) onto an offscreen canvas and return a
@@ -122,7 +71,7 @@ export default function ThumbnailEditor({
   const [posX, setPosX] = useState(() => saved?.posX ?? 0.5);
   const [posY, setPosY] = useState(() => saved?.posY ?? 0.82);
   const [style, setStyle] = useState<ThumbnailTextStyle>(() =>
-    saved?.style ? { ...DEFAULT_STYLE, ...saved.style } : DEFAULT_STYLE
+    saved?.style ? { ...DEFAULT_TEXT_STYLE, ...saved.style } : DEFAULT_TEXT_STYLE
   );
 
   const [t, setT] = useState(() => saved?.frameTime ?? clamp(duration / 3, 0, duration));
@@ -230,73 +179,7 @@ export default function ThumbnailEditor({
       ctx.fillRect(0, 0, W, H);
     }
 
-    const value = uppercase ? text.toUpperCase() : text;
-    if (!value.trim()) return;
-
-    ctx.font = `900 ${fontSize}px Arial, "Arial Black", sans-serif`;
-    ctx.textAlign = align;
-    ctx.textBaseline = 'middle';
-    ctx.lineJoin = 'round';
-
-    const lines = wrapLines(ctx, value, W * 0.92);
-    const lineH = fontSize * 1.16;
-    const total = lines.length * lineH;
-    const anchorX = posX * W;
-    let y = posY * H - total / 2 + lineH / 2;
-
-    const band = style.highlight;
-    for (const line of lines) {
-      if (line.trim()) {
-        const tw = ctx.measureText(line).width;
-        const lineLeft =
-          align === 'left' ? anchorX : align === 'right' ? anchorX - tw : anchorX - tw / 2;
-
-        // Highlight band behind the text (carries the drop shadow when set).
-        if (band) {
-          const padX = fontSize * 0.26;
-          const bh = fontSize * 1.04;
-          ctx.save();
-          if (style.shadowBlur > 0) {
-            ctx.shadowColor = style.shadowColor;
-            ctx.shadowBlur = style.shadowBlur;
-            ctx.shadowOffsetY = style.shadowOffsetY;
-          }
-          ctx.fillStyle = band.color;
-          roundRectPath(ctx, lineLeft - padX, y - bh / 2, tw + padX * 2, bh, bh * 0.16);
-          ctx.fill();
-          ctx.restore();
-        }
-
-        // Text paint: gradient overrides the solid fill.
-        let paint: string | CanvasGradient = style.fill;
-        if (style.gradient) {
-          const g = ctx.createLinearGradient(0, y - fontSize * 0.6, 0, y + fontSize * 0.6);
-          g.addColorStop(0, style.gradient.from);
-          g.addColorStop(1, style.gradient.to);
-          paint = g;
-        }
-
-        // Soft shadow under the glyphs (only when there's no band to carry it).
-        if (!band && style.shadowBlur > 0) {
-          ctx.save();
-          ctx.shadowColor = style.shadowColor;
-          ctx.shadowBlur = style.shadowBlur;
-          ctx.shadowOffsetY = style.shadowOffsetY;
-          ctx.fillStyle = typeof paint === 'string' ? paint : style.fill;
-          ctx.fillText(line, anchorX, y);
-          ctx.restore();
-        }
-
-        if (style.outlineWidth > 0) {
-          ctx.lineWidth = style.outlineWidth * 2;
-          ctx.strokeStyle = style.outlineColor;
-          ctx.strokeText(line, anchorX, y);
-        }
-        ctx.fillStyle = paint;
-        ctx.fillText(line, anchorX, y);
-      }
-      y += lineH;
-    }
+    drawStyledText(ctx, W, H, { text, fontSize, uppercase, align, posX, posY, style });
   }, [frame, text, fontSize, uppercase, align, posX, posY, style]);
 
   // Drag anywhere on the canvas to move the text anchor.
@@ -347,7 +230,7 @@ export default function ThumbnailEditor({
         context,
         prompt: textStylePrompt,
       });
-      const merged: ThumbnailTextStyle = { ...DEFAULT_STYLE, ...s };
+      const merged: ThumbnailTextStyle = { ...DEFAULT_TEXT_STYLE, ...s };
       // The band's intended text color becomes the actual fill, so the "Text"
       // color control and the renderer stay consistent (band = color only).
       if (merged.highlight?.textColor) merged.fill = merged.highlight.textColor;
@@ -527,7 +410,7 @@ export default function ThumbnailEditor({
         </button>
         <button
           type="button"
-          onClick={() => setStyle(DEFAULT_STYLE)}
+          onClick={() => setStyle(DEFAULT_TEXT_STYLE)}
           className="btn btn-secondary text-xs"
           title="Reset to plain white text with a black outline"
         >

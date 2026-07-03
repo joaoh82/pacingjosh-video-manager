@@ -201,6 +201,10 @@ export interface TimelineMusic {
 export interface TimelineOverlay {
   label?: string | null;
   filename?: string | null;
+  /** Overlay kind: "image" (default) or "text". */
+  kind?: 'image' | 'text';
+  /** For text overlays: the editable text+style spec, for rehydration. */
+  text_spec?: TextOverlaySpec | null;
   /** Absolute path to the snippet file (used to re-send on re-render). */
   path?: string;
   /** Where the snippet appears on the final timeline (seconds). */
@@ -345,6 +349,24 @@ export interface ThumbnailTextStyle {
   highlight: { color: string; textColor: string } | null;
 }
 
+/** Editable state for a text overlay burned onto the video (a client-rasterized
+ * full-frame transparent PNG). Sizes are authored against a 1080-tall reference
+ * frame and scaled to the real output resolution at render time, so the same
+ * spec looks identical on landscape and portrait exports. Persisted inside the
+ * timeline overlay's `text_spec` so it rehydrates on reopen. */
+export interface TextOverlaySpec {
+  text: string;
+  /** Font size in px at the 1080-tall reference frame. */
+  fontSize: number;
+  uppercase: boolean;
+  align: 'left' | 'center' | 'right';
+  /** Horizontal anchor, 0–1 of width. */
+  posX: number;
+  /** Vertical anchor, 0–1 of height. */
+  posY: number;
+  style: ThumbnailTextStyle;
+}
+
 /** Persisted thumbnail builder state — enough to rebuild and re-edit it. */
 export interface ThumbnailSpec {
   text: string;
@@ -392,8 +414,18 @@ export interface StartEditPayload {
  * A transparent GIF/PNG (its native alpha is used). Auto-placed in the longest
  * pause where no one is talking. */
 export interface OverlaySpecPayload {
-  /** Path to the overlay file (transparent GIF/image). */
-  path: string;
+  /** Path to the overlay file (transparent GIF/image). Omit/empty for text
+   *  overlays, where the PNG is sent inline via `image_data`. */
+  path?: string;
+  /** Overlay kind: "image" (default) or "text" (a client-rasterized full-frame
+   *  PNG built from `text_spec`). */
+  kind?: 'image' | 'text';
+  /** For text overlays: the editable text+style spec, echoed into the timeline
+   *  so the editor can rehydrate it. */
+  text_spec?: TextOverlaySpec;
+  /** For text overlays: the rasterized PNG as a base64 data URL. Materialized to
+   *  a file server-side, then dropped (never persisted). */
+  image_data?: string;
   /** Display label (e.g. "Subscribe"). */
   label?: string;
   /** Optional background colour to chroma-key out (e.g. "0xFFFFFF"). Empty/omit
