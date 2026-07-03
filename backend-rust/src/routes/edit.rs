@@ -70,7 +70,18 @@ pub struct StartEditRequest {
 /// One overlay snippet on a start-edit request. Mirrors [`edit_service::OverlaySpec`].
 #[derive(Deserialize)]
 pub struct OverlayReq {
+    #[serde(default)]
     pub path: String,
+    /// `"image"` (default) or `"text"` (a client-rasterized full-frame PNG).
+    #[serde(default = "default_overlay_kind")]
+    pub kind: String,
+    /// Editable text+style spec for text overlays; echoed into the timeline.
+    #[serde(default)]
+    pub text_spec: Option<serde_json::Value>,
+    /// Rasterized PNG (base64 / data URL) for text overlays; materialized to a
+    /// file server-side, then dropped.
+    #[serde(default)]
+    pub image_data: Option<String>,
     #[serde(default)]
     pub label: Option<String>,
     #[serde(default = "default_overlay_chroma")]
@@ -97,6 +108,7 @@ fn default_overlay_blend() -> f32 { 0.05 }
 fn default_overlay_scale() -> f32 { 1.0 }
 fn default_overlay_opacity() -> f32 { 1.0 }
 fn default_overlay_position() -> String { "center".to_string() }
+fn default_overlay_kind() -> String { "image".to_string() }
 
 /// List the built-in overlay snippets (e.g. the "Subscribe" bug), writing them
 /// out to the app-data overlays folder so the returned paths are valid on disk.
@@ -176,6 +188,9 @@ async fn start_edit(
             .iter()
             .map(|o| edit_service::OverlaySpec {
                 path: o.path.clone(),
+                kind: o.kind.clone(),
+                text_spec: o.text_spec.clone(),
+                image_data: o.image_data.clone(),
                 label: o.label.clone(),
                 chroma_color: o.chroma_color.clone(),
                 similarity: o.similarity,
@@ -343,6 +358,9 @@ async fn rerender_edit(
         list.iter()
             .map(|o| edit_service::OverlaySpec {
                 path: o.path.clone(),
+                kind: o.kind.clone(),
+                text_spec: o.text_spec.clone(),
+                image_data: o.image_data.clone(),
                 label: o.label.clone(),
                 chroma_color: o.chroma_color.clone(),
                 similarity: o.similarity,

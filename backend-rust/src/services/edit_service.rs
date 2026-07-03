@@ -8,6 +8,7 @@
 //! and polled by the frontend. The final EDL and video path are also persisted
 //! to the `production_edits` table so a completed edit can be reopened later.
 
+use base64::{engine::general_purpose::STANDARD, Engine};
 use chrono::{NaiveDateTime, Utc};
 use diesel::prelude::*;
 use log::{error, info, warn};
@@ -201,8 +202,26 @@ pub struct EditOptions {
 pub struct OverlaySpec {
     /// Path to the overlay file — a transparent GIF or image (PNG/JPG/…). A
     /// video file still works (composited as-is), but GIFs/images with native
-    /// alpha are the intended, better-looking path.
+    /// alpha are the intended, better-looking path. For `kind == "text"` this is
+    /// filled in when `image_data` is materialized to a PNG on disk.
+    #[serde(default)]
     pub path: String,
+    /// Overlay kind: `"image"` (a GIF/PNG/video snippet, the default) or
+    /// `"text"` (a full-frame transparent PNG rasterized on the client from
+    /// `text_spec`). Text overlays composite through the exact same image path,
+    /// so nothing else in the pipeline needs to special-case them.
+    #[serde(default = "default_overlay_kind")]
+    pub kind: String,
+    /// For text overlays: the editable text + style spec (opaque to the
+    /// backend), echoed into the timeline JSON so the editor can rehydrate it.
+    /// `None` for image overlays.
+    #[serde(default)]
+    pub text_spec: Option<serde_json::Value>,
+    /// For text overlays: the rasterized PNG as base64 (bare or a
+    /// `data:image/png;base64,…` URL). Materialized to a file under the run's
+    /// version folder before compositing, then cleared — never persisted.
+    #[serde(default, skip_serializing)]
+    pub image_data: Option<String>,
     /// Optional display label (e.g. "Subscribe"), echoed into the EDL/timeline.
     #[serde(default)]
     pub label: Option<String>,
@@ -243,6 +262,52 @@ fn default_overlay_blend() -> f32 { 0.05 }
 fn default_overlay_scale() -> f32 { 1.0 }
 fn default_overlay_opacity() -> f32 { 1.0 }
 fn default_overlay_position() -> String { "center".to_string() }
+fn default_overlay_kind() -> String { "image".to_string() }
+
+/// Decode a base64 string that may be bare or a `data:...;base64,` data URL.
+fn decode_data_url(data: &str) -> Result<Vec<u8>, String> {
+    let b64 = data.split(',').next_back().unwrap_or("").trim();
+    STANDARD.decode(b64).map_err(|e| format!("Bad image data: {}", e))
+}
+
+/// Materialize any text overlays' inline base64 PNGs (`image_data`) into files
+/// under the run's version folder (a hidden `.overlays/` subdir) and point the
+/// spec's `path` at them, clearing the (large, transient) blob so it's never
+/// persisted. Image/GIF overlays already carry a real path and pass through
+/// untouched. Best-effort: a spec that fails to decode/write is left as-is and
+/// will simply be skipped later by `resolve_overlays` (missing file).
+fn materialize_text_overlays(
+    specs: &mut [OverlaySpec],
+    out_dir: &std::path::Path,
+    edit_map: &EditJobMap,
+    job_id: &str,
+) {
+    let mut wrote_dir = false;
+    let assets_dir = out_dir.join(".overlays");
+    for (i, spec) in specs.iter_mut().enumerate() {
+        let data = match spec.image_data.take() {
+            Some(d) if !d.trim().is_empty() => d,
+            _ => continue,
+        };
+        if !wrote_dir {
+            if let Err(e) = std::fs::create_dir_all(&assets_dir) {
+                log_msg(edit_map, job_id, &format!("Could not create overlay asset folder: {}", e));
+                return;
+            }
+            wrote_dir = true;
+        }
+        match decode_data_url(&data) {
+            Ok(bytes) => {
+                let path = assets_dir.join(format!("text-{}.png", i));
+                match std::fs::write(&path, &bytes) {
+                    Ok(_) => spec.path = path.to_string_lossy().to_string(),
+                    Err(e) => log_msg(edit_map, job_id, &format!("Could not write text overlay {}: {}", i, e)),
+                }
+            }
+            Err(e) => log_msg(edit_map, job_id, &format!("Bad text overlay image {}: {}", i, e)),
+        }
+    }
+}
 
 /// Default on-screen duration (seconds) for a still-image overlay, which has no
 /// intrinsic length of its own.
@@ -608,8 +673,12 @@ fn run_rerender(
     pool: DbPool,
     edit_map: EditJobMap,
 ) {
-    let result = rerender_inner(job_id, production_id, &production_title, &opts, &ai, &cut_list, &enhance_flags, &transcripts, &mute, &fade, &edit_map);
+    let mut opts = opts;
+    let result = rerender_inner(job_id, production_id, &production_title, &mut opts, &ai, &cut_list, &enhance_flags, &transcripts, &mute, &fade, &edit_map);
     let logs = snapshot_logs(&edit_map, job_id);
+    // `opts.overlays` now holds the materialized text-overlay file paths (and the
+    // base64 blobs are `skip_serializing`), so the persisted options are compact
+    // and self-contained.
     let options_json = serde_json::to_string(&opts).ok();
     let transcripts_json = serde_json::to_string(&transcripts).ok();
 
@@ -662,7 +731,7 @@ fn rerender_inner(
     job_id: &str,
     production_id: i32,
     production_title: &str,
-    opts: &EditOptions,
+    opts: &mut EditOptions,
     ai: &AiSettings,
     cut_list: &[ResolvedClipInternal],
     enhance_flags: &[bool],
@@ -697,6 +766,11 @@ fn rerender_inner(
         log_msg(edit_map, job_id, &format!("Muting music in {} selected region(s).", mute.len()));
     }
     log_msg(edit_map, job_id, &format!("Re-rendering {} clip(s) from the saved cut.", cut_list.len()));
+
+    // Turn any inline text-overlay PNGs into files in this version folder so the
+    // rest of the pipeline treats them as ordinary image overlays (and the saved
+    // options reference a real, self-contained path).
+    materialize_text_overlays(&mut opts.overlays, &out_dir, edit_map, job_id);
 
     // Re-resolve overlays against the (possibly re-trimmed) cut so auto-placed
     // snippets land in the new pauses; explicitly-pinned ones keep their time.
@@ -1951,6 +2025,14 @@ pub fn delete_edit(
         }
     }
 
+    // Remove the hidden text-overlay asset folder (rasterized caption PNGs) so
+    // the version folder can be reclaimed as "empty" below.
+    if let Some(out) = edit.output_path.as_deref() {
+        if let Some(parent) = std::path::Path::new(out).parent() {
+            let _ = std::fs::remove_dir_all(parent.join(".overlays"));
+        }
+    }
+
     // Remove the run's version folder if it's now empty.
     if let Some(out) = edit.output_path.as_deref() {
         if let Some(parent) = std::path::Path::new(out).parent() {
@@ -2161,17 +2243,22 @@ fn overlays_to_json(
     placements
         .iter()
         .map(|p| {
-            // Recover the human label from the matching spec (by path), if any.
-            let label = specs
+            // Recover the human label + text-overlay spec from the matching spec
+            // (by path), so the editor can rehydrate text overlays on reopen.
+            let spec = specs
                 .iter()
-                .find(|s| std::path::Path::new(&s.path) == p.path)
-                .and_then(|s| s.label.clone());
+                .find(|s| std::path::Path::new(&s.path) == p.path);
+            let label = spec.and_then(|s| s.label.clone());
+            let kind = spec.map(|s| s.kind.clone()).unwrap_or_else(default_overlay_kind);
+            let text_spec = spec.and_then(|s| s.text_spec.clone());
             let filename = p
                 .path
                 .file_name()
                 .map(|f| f.to_string_lossy().to_string());
             serde_json::json!({
                 "label": label,
+                "kind": kind,
+                "text_spec": text_spec,
                 "filename": filename,
                 "path": p.path.to_string_lossy(),
                 "start": round2(p.start),

@@ -10,6 +10,7 @@ import {
   MusicEdit,
   TimelineAiPlan,
   OverlaySpecPayload,
+  TextOverlaySpec,
 } from '@/lib/types';
 import {
   getThumbnailUrl,
@@ -18,6 +19,12 @@ import {
   browseImage,
   getOverlayPreviewUrl,
 } from '@/lib/api';
+import {
+  DEFAULT_TEXT_STYLE,
+  drawTextOverlay,
+  rasterizeTextOverlayPng,
+} from '@/lib/styledText';
+import TextOverlayItemEditor from './TextOverlayItemEditor';
 
 /** Default on-screen seconds for an overlay whose length we don't know yet
  * (mirrors the backend default for still images). */
@@ -89,16 +96,53 @@ function overlayPreviewStyle(position: string, scale: number): CSSProperties {
   }
 }
 
-/** An overlay snippet (transparent GIF/image) being edited on the timeline
- * (re-render UI state). */
+/** Default on-screen seconds for a freshly-added text overlay. */
+const DEFAULT_TEXT_OVERLAY_SECS = 3;
+
+/** An overlay being edited on the timeline (re-render UI state). Either an image
+ * snippet (transparent GIF/image, auto-placed in a pause) or a text overlay (a
+ * client-rasterized full-frame PNG with explicit start/duration). */
 interface OverlayItem {
+  kind: 'image' | 'text';
+  /** Image path (empty for text overlays — the PNG is rasterized at render). */
   path: string;
   label: string;
+  /** Image scale factor (text overlays are always full-frame at scale 1). */
   scale: number;
+  /** Image position preset (text overlays bake position into the PNG → center). */
   position: string;
   /** Legacy chroma key colour, preserved when re-rendering an older run that
    * used a keyed video overlay. Empty for normal GIF/image overlays. */
   chromaColor: string;
+  /** Text overlays only: the editable text + style spec. */
+  text?: TextOverlaySpec;
+  /** Text overlays only: explicit start on the edited timeline (seconds). */
+  start?: number;
+  /** Text overlays only: explicit on-screen duration (seconds). */
+  duration?: number;
+}
+
+/** A fresh text overlay, positioned in the lower third and starting at `startSec`. */
+function newTextOverlay(startSec: number): OverlayItem {
+  return {
+    kind: 'text',
+    path: '',
+    label: 'Text',
+    scale: 1,
+    position: 'center',
+    chromaColor: '',
+    text: {
+      text: 'Your text',
+      fontSize: 96,
+      uppercase: false,
+      align: 'center',
+      posX: 0.5,
+      posY: 0.82,
+      style: { ...DEFAULT_TEXT_STYLE, outlineWidth: 12 },
+    },
+    start: Math.max(0, startSec),
+    duration: DEFAULT_TEXT_OVERLAY_SECS,
+  };
 }
 
 const OVERLAY_POSITIONS: { value: string; label: string }[] = [
@@ -116,17 +160,6 @@ function overlayLabelFromPath(p: string): string {
   return base.replace(/\.[^.]+$/, '');
 }
 
-/** Map an overlay editor item to the re-render payload (auto-placed, no start).
- * chroma_color is only sent when set (preserves a legacy keyed-video overlay). */
-function overlayItemToPayload(o: OverlayItem): OverlaySpecPayload {
-  return {
-    path: o.path,
-    label: o.label || undefined,
-    scale: o.scale,
-    position: o.position,
-    ...(o.chromaColor ? { chroma_color: o.chromaColor } : {}),
-  };
-}
 
 function fmtTime(s: number): string {
   const m = Math.floor(s / 60);
@@ -245,6 +278,14 @@ export default function EditTimeline({
   const overlaySeedRef = useRef<string>('[]');
   // Show a live placement preview of overlays over the player (before re-render).
   const [showOverlayPreview, setShowOverlayPreview] = useState(true);
+  // The selected overlay item (index), so dragging on the preview / the track
+  // knows which text overlay to move. Only meaningful for text overlays.
+  const [selectedOverlay, setSelectedOverlay] = useState<number | null>(null);
+  // Intrinsic size of the rendered video, used to rasterize text overlays at the
+  // real output resolution (so the preview and the burned-in PNG match exactly).
+  const [videoDims, setVideoDims] = useState<{ w: number; h: number } | null>(null);
+  // Canvas that composites the active text overlays over the player.
+  const previewCanvasRef = useRef<HTMLCanvasElement>(null);
 
   // Playback position (seconds, original render) mirrored by the playhead.
   const [currentTime, setCurrentTime] = useState(0);
@@ -298,19 +339,35 @@ export default function EditTimeline({
     seedRef.current = seed;
     setMusicActions(seed);
 
-    // Seed the overlay editor from the run's saved overlays (those that carry a
-    // path can be re-sent). Missing path → display-only, skipped from the editor.
+    // Seed the overlay editor from the run's saved overlays. Text overlays
+    // rehydrate from their `text_spec`; image overlays need a path to re-send.
     const seededOverlays: OverlayItem[] = (timeline.overlays ?? [])
-      .filter((o) => !!o.path)
-      .map((o) => ({
-        path: o.path as string,
-        label: o.label || o.filename || overlayLabelFromPath(o.path as string),
-        scale: o.scale ?? 1.0,
-        position: o.position || 'center',
-        chromaColor: o.chroma_color ?? '',
-      }));
+      .filter((o) => (o.kind === 'text' ? !!o.text_spec : !!o.path))
+      .map((o) =>
+        o.kind === 'text'
+          ? {
+              kind: 'text' as const,
+              path: '',
+              label: o.label || 'Text',
+              scale: 1,
+              position: 'center',
+              chromaColor: '',
+              text: o.text_spec as TextOverlaySpec,
+              start: o.start ?? 0,
+              duration: o.duration ?? DEFAULT_TEXT_OVERLAY_SECS,
+            }
+          : {
+              kind: 'image' as const,
+              path: o.path as string,
+              label: o.label || o.filename || overlayLabelFromPath(o.path as string),
+              scale: o.scale ?? 1.0,
+              position: o.position || 'center',
+              chromaColor: o.chroma_color ?? '',
+            }
+      );
     overlaySeedRef.current = JSON.stringify(seededOverlays);
     setOverlayItems(seededOverlays);
+    setSelectedOverlay(null);
     setOverlayError(null);
   }, [timeline]);
 
@@ -409,25 +466,34 @@ export default function EditTimeline({
   // land before a re-render. Duration is the snippet's saved length when known
   // (matched by path), else a default.
   const livePlacements = useMemo(() => {
-    if (!overlayItems.length) return [] as {
-      item: OverlayItem;
-      start: number;
-      end: number;
-    }[];
+    type Placement = { item: OverlayItem; index: number; start: number; end: number };
+    if (!overlayItems.length) return [] as Placement[];
+    // Image overlays are auto-placed in the longest pauses (mirroring the
+    // backend). Only they participate in auto-placement — text overlays carry
+    // their own explicit start/duration.
     const durByPath = new Map<string, number>();
     for (const o of timeline.overlays ?? []) {
       if (o.path && o.duration) durByPath.set(o.path, o.duration);
     }
-    const durations = overlayItems.map(
-      (o) => durByPath.get(o.path) ?? OVERLAY_PREVIEW_FALLBACK_SECS
+    const imageIdx = overlayItems
+      .map((o, i) => ({ o, i }))
+      .filter((x) => x.o.kind !== 'text');
+    const imageDurations = imageIdx.map(
+      (x) => durByPath.get(x.o.path) ?? OVERLAY_PREVIEW_FALLBACK_SECS
     );
     const gaps = nonSpeechGaps(editedSpeech, dur);
-    const starts = autoOverlayStarts(gaps, durations);
-    return overlayItems.map((item, i) => ({
-      item,
-      start: starts[i] ?? 0,
-      end: (starts[i] ?? 0) + durations[i],
-    }));
+    const imageStarts = autoOverlayStarts(gaps, imageDurations);
+    let imgN = 0;
+    return overlayItems.map((item, i): Placement => {
+      if (item.kind === 'text') {
+        const start = Math.max(0, Math.min(item.start ?? 0, Math.max(0, dur - 0.05)));
+        const d = Math.max(0.2, item.duration ?? DEFAULT_TEXT_OVERLAY_SECS);
+        return { item, index: i, start, end: Math.min(dur, start + d) };
+      }
+      const k = imgN++;
+      const start = imageStarts[k] ?? 0;
+      return { item, index: i, start, end: start + (imageDurations[k] ?? OVERLAY_PREVIEW_FALLBACK_SECS) };
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [overlayItems, editedSpeech, dur, timeline]);
 
@@ -549,6 +615,7 @@ export default function EditTimeline({
     setDragPreview(null);
     setAiNote(null);
     setOverlayItems(JSON.parse(overlaySeedRef.current)); // back to saved overlays
+    setSelectedOverlay(null);
     setOverlayError(null);
   };
 
@@ -566,6 +633,7 @@ export default function EditTimeline({
         return;
       }
       addOverlayItem({
+        kind: 'image',
         path: sub.path,
         label: sub.label,
         scale: 1.0,
@@ -584,6 +652,7 @@ export default function EditTimeline({
       const r = await browseImage();
       if (r.success && r.path) {
         addOverlayItem({
+          kind: 'image',
           path: r.path,
           label: overlayLabelFromPath(r.path),
           scale: 1.0,
@@ -596,17 +665,93 @@ export default function EditTimeline({
     }
   };
 
+  // Add a text overlay starting at the current playhead, and select it so it can
+  // be dragged on the preview straight away.
+  const handleAddText = () => {
+    setOverlayError(null);
+    const startSec = Math.max(0, Math.min(remapPoint(currentTime), Math.max(0, dur - 0.2)));
+    setOverlayItems((list) => {
+      setSelectedOverlay(list.length);
+      return [...list, newTextOverlay(startSec)];
+    });
+  };
+
   const updateOverlayItem = (idx: number, patch: Partial<OverlayItem>) =>
     setOverlayItems((list) => list.map((o, i) => (i === idx ? { ...o, ...patch } : o)));
-  const removeOverlayItem = (idx: number) =>
+  const removeOverlayItem = (idx: number) => {
     setOverlayItems((list) => list.filter((_, i) => i !== idx));
+    setSelectedOverlay((s) => (s === idx ? null : s !== null && s > idx ? s - 1 : s));
+  };
+
+  // Map an overlay editor item to the re-render payload. Text overlays are
+  // rasterized to a full-frame transparent PNG at the real output resolution and
+  // sent inline (with their editable spec + explicit timing); image overlays are
+  // auto-placed (no start), preserving any legacy chroma key.
+  const overlayToPayload = (o: OverlayItem): OverlaySpecPayload => {
+    if (o.kind === 'text' && o.text) {
+      const w = videoDims?.w || 1920;
+      const h = videoDims?.h || 1080;
+      return {
+        kind: 'text',
+        text_spec: o.text,
+        image_data: rasterizeTextOverlayPng(o.text, w, h),
+        label: o.label || 'Text',
+        position: 'center',
+        scale: 1,
+        start: round2(Math.max(0, o.start ?? 0)),
+        duration: round2(Math.max(0.2, o.duration ?? DEFAULT_TEXT_OVERLAY_SECS)),
+      };
+    }
+    return {
+      path: o.path,
+      label: o.label || undefined,
+      scale: o.scale,
+      position: o.position,
+      ...(o.chromaColor ? { chroma_color: o.chromaColor } : {}),
+    };
+  };
+
+  // Composite the active text overlays onto the preview canvas — same renderer
+  // and resolution as the exported PNG, so the preview is exactly WYSIWYG.
+  useEffect(() => {
+    const canvas = previewCanvasRef.current;
+    if (!canvas) return;
+    const w = videoDims?.w || 0;
+    const h = videoDims?.h || 0;
+    if (w === 0 || h === 0) return;
+    if (canvas.width !== w) canvas.width = w;
+    if (canvas.height !== h) canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, w, h);
+    for (const p of activeOverlays) {
+      if (p.item.kind === 'text' && p.item.text) drawTextOverlay(ctx, w, h, p.item.text);
+    }
+  }, [activeOverlays, videoDims]);
+
+  // Drag the selected text overlay on the preview to reposition it (posX/posY).
+  const draggingOverlayRef = useRef(false);
+  const overlayDragActive =
+    selectedOverlay != null && overlayItems[selectedOverlay]?.kind === 'text';
+  const setOverlayPosFromEvent = (clientX: number, clientY: number) => {
+    if (selectedOverlay == null) return;
+    const item = overlayItems[selectedOverlay];
+    if (!item || item.kind !== 'text' || !item.text) return;
+    const canvas = previewCanvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    const posX = Math.max(0.02, Math.min(0.98, (clientX - rect.left) / rect.width));
+    const posY = Math.max(0.03, Math.min(0.97, (clientY - rect.top) / rect.height));
+    updateOverlayItem(selectedOverlay, { text: { ...item.text, posX, posY } });
+  };
 
   const removedClips = timeline.clips.filter((c) => isRemoved(c.order));
   const selectedClips = selected.map((o) => byOrder.get(o)).filter(Boolean) as LaidClip[];
   const singleSel = selectedClips.length === 1 ? selectedClips[0] : null;
 
   // --- Build the re-render payload ---------------------------------------------
-  const buildEdits = (): TimelineEdits => {
+  const buildEdits = (rasterize: boolean): TimelineEdits => {
     const clips: ClipEdit[] = [];
     for (const c of timeline.clips) {
       const e = clipEdits[c.order];
@@ -644,10 +789,15 @@ export default function EditTimeline({
       if (a === 'remove') mute.push({ start: round2(r.es), end: round2(r.ee) });
       else fade.push({ start: round2(r.es), end: round2(r.ee) });
     }
-    // Only send overlays when the user actually changed them; otherwise the
-    // backend keeps the run's saved set (so a clip/music-only re-render doesn't
-    // need to re-send overlays).
-    const overlays = overlaysChanged ? overlayItems.map(overlayItemToPayload) : undefined;
+    // Only include overlays when actually re-rendering (rasterizing text to PNGs
+    // is expensive, so it's skipped for the reactive `pendingEdits`). Text
+    // overlays are always re-sent (re-rasterized at the current cut's timing);
+    // image overlays only when changed — otherwise the backend keeps the run's
+    // saved set (a clip/music-only re-render needn't re-send overlays).
+    let overlays: OverlaySpecPayload[] | undefined;
+    if (rasterize && (overlaysChanged || hasTextOverlay)) {
+      overlays = overlayItems.map(overlayToPayload);
+    }
     return { clips, mute, fade, overlays };
   };
 
@@ -655,8 +805,12 @@ export default function EditTimeline({
     () => JSON.stringify(overlayItems) !== overlaySeedRef.current,
     [overlayItems]
   );
+  const hasTextOverlay = useMemo(
+    () => overlayItems.some((o) => o.kind === 'text'),
+    [overlayItems]
+  );
 
-  const pendingEdits = buildEdits();
+  const pendingEdits = buildEdits(false);
   const nClipEdits = pendingEdits.clips.length;
   const nMute = pendingEdits.mute.length;
   const nFade = pendingEdits.fade.length;
@@ -865,7 +1019,56 @@ export default function EditTimeline({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pxPerSec]);
 
+  // --- Text-overlay timing drag (move / resize on the Overlays track) ----------
+  const overlayTimeDragRef = useRef<
+    { index: number; mode: 'move' | 'L' | 'R'; startX: number; start0: number; dur0: number } | null
+  >(null);
+  const startOverlayTimeDrag = (
+    index: number,
+    mode: 'move' | 'L' | 'R',
+    clientX: number
+  ) => {
+    const it = overlayItems[index];
+    if (!editable || !it || it.kind !== 'text') return;
+    setSelectedOverlay(index);
+    overlayTimeDragRef.current = {
+      index,
+      mode,
+      startX: clientX,
+      start0: it.start ?? 0,
+      dur0: it.duration ?? DEFAULT_TEXT_OVERLAY_SECS,
+    };
+  };
+  useEffect(() => {
+    const move = (e: MouseEvent) => {
+      const d = overlayTimeDragRef.current;
+      if (!d) return;
+      const delta = (e.clientX - d.startX) / pxPerSec;
+      if (d.mode === 'move') {
+        const start = Math.max(0, Math.min(Math.max(0, dur - d.dur0), d.start0 + delta));
+        updateOverlayItem(d.index, { start });
+      } else if (d.mode === 'R') {
+        const duration = Math.max(0.2, Math.min(dur - d.start0, d.dur0 + delta));
+        updateOverlayItem(d.index, { duration });
+      } else {
+        const start = Math.max(0, Math.min(d.start0 + d.dur0 - 0.2, d.start0 + delta));
+        updateOverlayItem(d.index, { start, duration: d.dur0 + (d.start0 - start) });
+      }
+    };
+    const up = () => {
+      overlayTimeDragRef.current = null;
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+    return () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pxPerSec, dur]);
+
   const ticks = Array.from({ length: 9 }, (_, i) => (dur * i) / 8);
+  const showOverlayTrack = editable ? overlayItems.length > 0 : overlays.length > 0;
   const Label = ({ h, children }: { h: number; children: ReactNode }) => (
     <div
       style={{ height: h }}
@@ -898,20 +1101,75 @@ export default function EditTimeline({
             src={videoSrc}
             controls
             preload="metadata"
+            onLoadedMetadata={(e) => {
+              const v = e.currentTarget;
+              if (v.videoWidth && v.videoHeight) {
+                setVideoDims({ w: v.videoWidth, h: v.videoHeight });
+              }
+            }}
             className="block w-full max-h-[360px] bg-black rounded"
           />
-          {activeOverlays.length > 0 && (
+          {/* Image/GIF overlays — live placement preview via <img>. */}
+          {activeOverlays.some((p) => p.item.kind !== 'text') && (
             <div className="absolute inset-0 pointer-events-none overflow-hidden rounded">
-              {activeOverlays.map((p) => (
-                <img
-                  key={`${p.item.path}-${p.start}`}
-                  src={getOverlayPreviewUrl(p.item.path)}
-                  alt=""
-                  className="absolute"
-                  style={overlayPreviewStyle(p.item.position, p.item.scale)}
-                />
-              ))}
+              {activeOverlays
+                .filter((p) => p.item.kind !== 'text')
+                .map((p) => (
+                  <img
+                    key={`${p.item.path}-${p.start}`}
+                    src={getOverlayPreviewUrl(p.item.path)}
+                    alt=""
+                    className="absolute"
+                    style={overlayPreviewStyle(p.item.position, p.item.scale)}
+                  />
+                ))}
             </div>
+          )}
+          {/* Text overlays — composited on a canvas at the real output
+              resolution so the preview matches the burned-in PNG exactly. When a
+              text overlay is selected, the canvas takes pointer events so it can
+              be dragged into position. */}
+          <canvas
+            ref={previewCanvasRef}
+            onPointerDown={
+              overlayDragActive
+                ? (e) => {
+                    draggingOverlayRef.current = true;
+                    previewCanvasRef.current?.setPointerCapture(e.pointerId);
+                    setOverlayPosFromEvent(e.clientX, e.clientY);
+                  }
+                : undefined
+            }
+            onPointerMove={
+              overlayDragActive
+                ? (e) => {
+                    if (draggingOverlayRef.current) {
+                      setOverlayPosFromEvent(e.clientX, e.clientY);
+                    }
+                  }
+                : undefined
+            }
+            onPointerUp={
+              overlayDragActive
+                ? (e) => {
+                    draggingOverlayRef.current = false;
+                    previewCanvasRef.current?.releasePointerCapture(e.pointerId);
+                  }
+                : undefined
+            }
+            className={`absolute inset-0 w-full h-full rounded ${
+              overlayDragActive ? 'cursor-move' : 'pointer-events-none'
+            }`}
+          />
+          {overlayDragActive && (
+            <button
+              type="button"
+              onClick={() => setSelectedOverlay(null)}
+              className="absolute bottom-1 right-1 text-[10px] text-white bg-primary-600/85 rounded px-1.5 py-0.5"
+              title="Finish positioning — restores the video controls"
+            >
+              ✓ done
+            </button>
           )}
           {overlayItems.length > 0 && (
             <label
@@ -984,7 +1242,7 @@ export default function EditTimeline({
         {onRerender && (
           <button
             type="button"
-            onClick={() => onRerender(pendingEdits)}
+            onClick={() => onRerender(buildEdits(true))}
             disabled={busy || !hasEdits}
             className="btn btn-primary text-xs whitespace-nowrap disabled:opacity-40"
             title="Re-render a new version with your timeline edits"
@@ -1128,7 +1386,7 @@ export default function EditTimeline({
         <div className="flex flex-col gap-1 flex-none w-12">
           <div style={{ height: 16 }} />
           <Label h={52}>Video</Label>
-          {overlays.length > 0 && <Label h={18}>Overlays</Label>}
+          {showOverlayTrack && <Label h={18}>Overlays</Label>}
           <Label h={16}>Voice</Label>
           <Label h={44}>Music</Label>
         </div>
@@ -1258,25 +1516,87 @@ export default function EditTimeline({
               )}
             </div>
 
-            {/* Overlays — read-only markers for snippets dropped into the pauses */}
-            {overlays.length > 0 && (
+            {/* Overlays track. When editing, it reflects the pending overlays:
+                image snippets are read-only (auto-placed in pauses), text
+                overlays are draggable (move) and resizable (edges) for timing. */}
+            {showOverlayTrack && (
               <div className="relative bg-gray-200/60 dark:bg-gray-800 rounded overflow-hidden" style={{ height: 18 }}>
-                {overlays.map((o, i) => {
-                  const name = o.label || o.filename || 'overlay';
-                  const subscribe = /subscrib/i.test(name);
-                  return (
-                    <div
-                      key={i}
-                      className="absolute top-0.5 bottom-0.5 rounded-sm bg-indigo-500/80 border border-indigo-300/60 flex items-center px-1 overflow-hidden pointer-events-auto"
-                      style={{ left: X(o.start), width: Math.max(8, Wd(o.start, o.end)) }}
-                      title={`${name} · ${fmtTime(o.start)}–${fmtTime(o.end)} · ${o.position} (auto-placed in a pause; re-placed on re-render)`}
-                    >
-                      <span className="text-[9px] leading-none text-white truncate">
-                        {subscribe ? '🔔' : '▶'} {name}
-                      </span>
-                    </div>
-                  );
-                })}
+                {editable
+                  ? livePlacements.map((p) => {
+                      const isText = p.item.kind === 'text';
+                      const name =
+                        p.item.label || (isText ? p.item.text?.text || 'text' : overlayLabelFromPath(p.item.path));
+                      const sel = selectedOverlay === p.index;
+                      return (
+                        <div
+                          key={p.index}
+                          onMouseDown={
+                            isText
+                              ? (e) => {
+                                  e.stopPropagation();
+                                  startOverlayTimeDrag(p.index, 'move', e.clientX);
+                                }
+                              : undefined
+                          }
+                          onClick={() => isText && setSelectedOverlay(p.index)}
+                          className={`absolute top-0.5 bottom-0.5 rounded-sm border flex items-center px-1 overflow-hidden ${
+                            isText
+                              ? `bg-orange-500/85 border-orange-300/70 ${editable ? 'cursor-move' : ''} ${
+                                  sel ? 'ring-1 ring-white' : ''
+                                }`
+                              : 'bg-indigo-500/80 border-indigo-300/60'
+                          }`}
+                          style={{ left: X(p.start), width: Math.max(10, Wd(p.start, p.end)) }}
+                          title={
+                            isText
+                              ? `${name} · ${fmtTime(p.start)}–${fmtTime(p.end)} (drag to move; drag edges to retime)`
+                              : `${name} · ${fmtTime(p.start)}–${fmtTime(p.end)} · ${p.item.position} (auto-placed in a pause)`
+                          }
+                        >
+                          {isText && (
+                            <div
+                              onMouseDown={(e) => {
+                                e.stopPropagation();
+                                startOverlayTimeDrag(p.index, 'L', e.clientX);
+                              }}
+                              className="absolute left-0 top-0 bottom-0 w-1.5 bg-white/70 cursor-ew-resize"
+                            />
+                          )}
+                          <span className="text-[9px] leading-none text-white truncate pointer-events-none">
+                            {isText ? '🅣' : /subscrib/i.test(name) ? '🔔' : '▶'} {name}
+                          </span>
+                          {isText && (
+                            <div
+                              onMouseDown={(e) => {
+                                e.stopPropagation();
+                                startOverlayTimeDrag(p.index, 'R', e.clientX);
+                              }}
+                              className="absolute right-0 top-0 bottom-0 w-1.5 bg-white/70 cursor-ew-resize"
+                            />
+                          )}
+                        </div>
+                      );
+                    })
+                  : overlays.map((o, i) => {
+                      const name = o.label || o.filename || 'overlay';
+                      const isText = o.kind === 'text';
+                      return (
+                        <div
+                          key={i}
+                          className={`absolute top-0.5 bottom-0.5 rounded-sm border flex items-center px-1 overflow-hidden ${
+                            isText
+                              ? 'bg-orange-500/85 border-orange-300/70'
+                              : 'bg-indigo-500/80 border-indigo-300/60'
+                          }`}
+                          style={{ left: X(o.start), width: Math.max(8, Wd(o.start, o.end)) }}
+                          title={`${name} · ${fmtTime(o.start)}–${fmtTime(o.end)} · ${o.position}`}
+                        >
+                          <span className="text-[9px] leading-none text-white truncate">
+                            {isText ? '🅣' : /subscrib/i.test(name) ? '🔔' : '▶'} {name}
+                          </span>
+                        </div>
+                      );
+                    })}
               </div>
             )}
 
@@ -1363,8 +1683,16 @@ export default function EditTimeline({
             >
               ➕ Add image/GIF…
             </button>
+            <button
+              type="button"
+              onClick={handleAddText}
+              disabled={busy}
+              className="text-[10px] px-1.5 py-0.5 rounded bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300 hover:bg-orange-200 disabled:opacity-40"
+            >
+              🅣 Add text…
+            </button>
             <span className="text-[10px] text-gray-400 dark:text-gray-500">
-              dropped into the longest pause; re-render to apply
+              re-render to apply
             </span>
           </div>
           {overlayError && (
@@ -1372,52 +1700,72 @@ export default function EditTimeline({
           )}
           {overlayItems.length > 0 && (
             <div className="mt-2 space-y-1.5">
-              {overlayItems.map((o, idx) => (
-                <div
-                  key={idx}
-                  className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded border border-gray-200 dark:border-gray-700 px-2 py-1.5"
-                >
-                  <span className="text-[11px] text-gray-700 dark:text-gray-200 truncate max-w-[180px]" title={o.path}>
-                    {/subscrib/i.test(o.label) ? '🔔' : '▶'} {o.label || overlayLabelFromPath(o.path)}
-                  </span>
-                  <label className="flex items-center gap-1 text-[10px] text-gray-600 dark:text-gray-300">
-                    Pos
-                    <select
-                      value={o.position}
-                      onChange={(e) => updateOverlayItem(idx, { position: e.target.value })}
-                      disabled={busy}
-                      className="input text-[10px] py-0.5 px-1"
-                    >
-                      {OVERLAY_POSITIONS.map((p) => (
-                        <option key={p.value} value={p.value}>
-                          {p.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="flex items-center gap-1 text-[10px] text-gray-600 dark:text-gray-300">
-                    Size {Math.round(o.scale * 100)}%
-                    <input
-                      type="range"
-                      min={0.2}
-                      max={1}
-                      step={0.05}
-                      value={o.scale}
-                      onChange={(e) => updateOverlayItem(idx, { scale: parseFloat(e.target.value) })}
-                      disabled={busy}
-                      className="w-20"
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => removeOverlayItem(idx)}
-                    disabled={busy}
-                    className="text-[10px] text-gray-500 hover:text-red-600 dark:text-gray-400 ml-auto"
+              {overlayItems.map((o, idx) =>
+                o.kind === 'text' && o.text ? (
+                  <TextOverlayItemEditor
+                    key={idx}
+                    spec={o.text}
+                    start={o.start ?? 0}
+                    duration={o.duration ?? DEFAULT_TEXT_OVERLAY_SECS}
+                    dur={dur}
+                    playhead={remapPoint(currentTime)}
+                    editId={editId}
+                    busy={busy}
+                    selected={selectedOverlay === idx}
+                    onSelect={() => setSelectedOverlay(idx)}
+                    onSpecChange={(text) => updateOverlayItem(idx, { text })}
+                    onTimingChange={(start, duration) =>
+                      updateOverlayItem(idx, { start, duration })
+                    }
+                    onRemove={() => removeOverlayItem(idx)}
+                  />
+                ) : (
+                  <div
+                    key={idx}
+                    className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded border border-gray-200 dark:border-gray-700 px-2 py-1.5"
                   >
-                    remove
-                  </button>
-                </div>
-              ))}
+                    <span className="text-[11px] text-gray-700 dark:text-gray-200 truncate max-w-[180px]" title={o.path}>
+                      {/subscrib/i.test(o.label) ? '🔔' : '▶'} {o.label || overlayLabelFromPath(o.path)}
+                    </span>
+                    <label className="flex items-center gap-1 text-[10px] text-gray-600 dark:text-gray-300">
+                      Pos
+                      <select
+                        value={o.position}
+                        onChange={(e) => updateOverlayItem(idx, { position: e.target.value })}
+                        disabled={busy}
+                        className="input text-[10px] py-0.5 px-1"
+                      >
+                        {OVERLAY_POSITIONS.map((p) => (
+                          <option key={p.value} value={p.value}>
+                            {p.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="flex items-center gap-1 text-[10px] text-gray-600 dark:text-gray-300">
+                      Size {Math.round(o.scale * 100)}%
+                      <input
+                        type="range"
+                        min={0.2}
+                        max={1}
+                        step={0.05}
+                        value={o.scale}
+                        onChange={(e) => updateOverlayItem(idx, { scale: parseFloat(e.target.value) })}
+                        disabled={busy}
+                        className="w-20"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => removeOverlayItem(idx)}
+                      disabled={busy}
+                      className="text-[10px] text-gray-500 hover:text-red-600 dark:text-gray-400 ml-auto"
+                    >
+                      remove
+                    </button>
+                  </div>
+                )
+              )}
             </div>
           )}
         </div>
@@ -1445,8 +1793,10 @@ export default function EditTimeline({
 
       <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-1 pl-14">
         Total {fmtTime(dur)} · {laid.length} clip{laid.length !== 1 ? 's' : ''}
-        {overlays.length > 0
-          ? ` · ${overlays.length} overlay${overlays.length !== 1 ? 's' : ''} (auto-placed in pauses)`
+        {(editable ? overlayItems.length : overlays.length) > 0
+          ? ` · ${editable ? overlayItems.length : overlays.length} overlay${
+              (editable ? overlayItems.length : overlays.length) !== 1 ? 's' : ''
+            }`
           : ''}
         .
         {videoSrc ? ' Play the preview above or click/drag the ruler to scrub.' : ''}
