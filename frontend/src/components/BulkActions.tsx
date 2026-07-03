@@ -1,12 +1,14 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Production } from '@/lib/types';
-import { bulkUpdateVideos, BulkUpdateRequest, getProductions } from '@/lib/api';
+import { Production, Video } from '@/lib/types';
+import { bulkUpdateVideos, BulkUpdateRequest, getProductions, deleteVideo } from '@/lib/api';
 
 interface BulkActionsProps {
   selectedCount: number;
   selectedVideoIds: number[];
+  /** Full video objects for the selection (used by single-video delete). */
+  selectedVideos?: Video[];
   onClearSelection: () => void;
   onUpdate: () => void;
 }
@@ -14,6 +16,7 @@ interface BulkActionsProps {
 export default function BulkActions({
   selectedCount,
   selectedVideoIds,
+  selectedVideos = [],
   onClearSelection,
   onUpdate,
 }: BulkActionsProps) {
@@ -26,13 +29,45 @@ export default function BulkActions({
   const [addProductionIds, setAddProductionIds] = useState<number[]>([]);
   const [removeProductionIds, setRemoveProductionIds] = useState<number[]>([]);
 
+  // Single-video delete (with a library-only vs delete-from-disk choice).
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
   useEffect(() => {
     if (isOpen) {
       getProductions().then(setAllProductions).catch(() => {});
     }
   }, [isOpen]);
 
+  // Reset the delete panel whenever the selection changes.
+  useEffect(() => {
+    setDeleteOpen(false);
+    setDeleteError(null);
+  }, [selectedVideoIds.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
+
   if (selectedCount === 0) return null;
+
+  // Delete applies to exactly one selected video.
+  const deleteTarget = selectedCount === 1 ? selectedVideos[0] ?? null : null;
+  const targetProductions = deleteTarget?.productions ?? [];
+
+  const handleDelete = async (deleteFile: boolean) => {
+    if (!deleteTarget) return;
+    setIsDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteVideo(deleteTarget.id, deleteFile);
+      setDeleteOpen(false);
+      onClearSelection();
+      onUpdate();
+    } catch (e: any) {
+      // Includes the backend's 409 "used in a production" message.
+      setDeleteError(e.message || 'Failed to delete the video');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   const toggleAddProduction = (id: number) => {
     setAddProductionIds((prev) =>
@@ -105,14 +140,89 @@ export default function BulkActions({
           </div>
 
           <div className="flex items-center gap-2">
+            {deleteTarget && (
+              <button
+                onClick={() => {
+                  setDeleteOpen((o) => !o);
+                  setDeleteError(null);
+                  setIsOpen(false);
+                }}
+                className="btn bg-red-600 hover:bg-red-700 text-white"
+              >
+                🗑 Delete
+              </button>
+            )}
             <button
-              onClick={() => setIsOpen(!isOpen)}
+              onClick={() => {
+                setIsOpen(!isOpen);
+                setDeleteOpen(false);
+              }}
               className="btn btn-primary"
             >
               Bulk Edit
             </button>
           </div>
         </div>
+
+        {/* Delete confirmation */}
+        {deleteOpen && deleteTarget && (
+          <div className="mt-4 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
+            {targetProductions.length > 0 ? (
+              <div className="flex items-start gap-3">
+                <span className="text-xl">🚫</span>
+                <div>
+                  <p className="font-medium text-gray-900 dark:text-white">
+                    “{deleteTarget.filename}” can’t be deleted
+                  </p>
+                  <p className="text-sm text-gray-600 dark:text-gray-300 mt-1">
+                    It is used in the production{targetProductions.length !== 1 ? 's' : ''}{' '}
+                    <span className="font-medium">
+                      {targetProductions.map((p) => p.title).join(', ')}
+                    </span>
+                    . Remove it from the production{targetProductions.length !== 1 ? 's' : ''} first
+                    if you really want to delete it.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div>
+                <p className="font-medium text-gray-900 dark:text-white">
+                  Delete “{deleteTarget.filename}”?
+                </p>
+                <p className="text-sm text-gray-600 dark:text-gray-300 mt-1 mb-3">
+                  Remove it from the library only (the file stays on your drive), or also delete
+                  the file from disk. Deleting from disk cannot be undone.
+                </p>
+                {deleteError && (
+                  <p className="text-sm text-red-600 dark:text-red-400 mb-3">{deleteError}</p>
+                )}
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={() => handleDelete(false)}
+                    disabled={isDeleting}
+                    className="btn btn-secondary text-sm"
+                  >
+                    {isDeleting ? 'Deleting…' : 'Remove from library'}
+                  </button>
+                  <button
+                    onClick={() => handleDelete(true)}
+                    disabled={isDeleting}
+                    className="btn bg-red-600 hover:bg-red-700 text-white text-sm"
+                  >
+                    {isDeleting ? 'Deleting…' : 'Delete file from disk too'}
+                  </button>
+                  <button
+                    onClick={() => setDeleteOpen(false)}
+                    disabled={isDeleting}
+                    className="btn btn-secondary text-sm"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Bulk Edit Form */}
         {isOpen && (

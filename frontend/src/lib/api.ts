@@ -202,6 +202,23 @@ export async function openVideoFolder(id: number): Promise<void> {
   await fetchApi(`/api/videos/${id}/open-folder`, { method: 'POST' });
 }
 
+export interface DeleteVideoResponse {
+  message: string;
+  file_deleted: boolean;
+}
+
+/**
+ * Delete a video from the library; with `deleteFile` the source file is also
+ * removed from disk. The backend refuses (409) when the video is used in a
+ * production — the error message names the production(s).
+ */
+export async function deleteVideo(id: number, deleteFile: boolean): Promise<DeleteVideoResponse> {
+  return fetchApi<DeleteVideoResponse>(
+    `/api/videos/${id}?delete_file=${deleteFile ? 'true' : 'false'}`,
+    { method: 'DELETE' }
+  );
+}
+
 // --- Bulk update ---
 
 export interface BulkUpdateRequest {
