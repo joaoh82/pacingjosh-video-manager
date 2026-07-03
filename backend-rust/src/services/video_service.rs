@@ -2,7 +2,7 @@ use diesel::prelude::*;
 use diesel::sqlite::SqliteConnection;
 
 use crate::models::*;
-use crate::schema::{videos, metadata, tags, video_tags, video_productions};
+use crate::schema::{videos, metadata, productions, tags, video_tags, video_productions};
 
 /// Get a single video with all relationships
 pub fn get_video(conn: &mut SqliteConnection, video_id: i32) -> Option<VideoFull> {
@@ -124,12 +124,79 @@ pub fn update_video(
     get_video(conn, video_id)
 }
 
-/// Delete a video and all its relationships (cascading)
-pub fn delete_video(conn: &mut SqliteConnection, video_id: i32) -> bool {
-    let result = diesel::delete(videos::table.find(video_id))
-        .execute(conn);
+/// Why a video could not be deleted.
+pub enum DeleteVideoError {
+    NotFound,
+    /// The video is linked to one or more productions (their titles).
+    UsedInProductions(Vec<String>),
+    Db(String),
+}
 
-    matches!(result, Ok(count) if count > 0)
+/// What happened on disk during a successful delete.
+pub struct DeleteVideoOutcome {
+    /// True when the source file was removed (or was already gone).
+    pub file_deleted: bool,
+    /// Set when file removal was requested but failed (e.g. file in use).
+    pub file_error: Option<String>,
+}
+
+/// Delete a video from the library. Refuses when the video is used in any
+/// production — those are part of an edit history and must be unlinked first.
+/// DB relationships cascade; the thumbnail folder is removed unless a
+/// duplicate video shares the same checksum. With `delete_file`, the source
+/// file is also removed from disk (best-effort — the DB row is already gone,
+/// so a locked file is reported rather than rolling back).
+pub fn delete_video_checked(
+    conn: &mut SqliteConnection,
+    video_id: i32,
+    delete_file: bool,
+    thumbnail_dir: &std::path::Path,
+) -> Result<DeleteVideoOutcome, DeleteVideoError> {
+    let video: Video = videos::table
+        .find(video_id)
+        .first(conn)
+        .map_err(|_| DeleteVideoError::NotFound)?;
+
+    let used_in: Vec<String> = video_productions::table
+        .inner_join(productions::table)
+        .filter(video_productions::video_id.eq(video_id))
+        .select(productions::title)
+        .load(conn)
+        .map_err(|e| DeleteVideoError::Db(e.to_string()))?;
+    if !used_in.is_empty() {
+        return Err(DeleteVideoError::UsedInProductions(used_in));
+    }
+
+    diesel::delete(videos::table.find(video_id))
+        .execute(conn)
+        .map_err(|e| DeleteVideoError::Db(e.to_string()))?;
+
+    // Thumbnails are stored per-checksum; only remove the folder when no
+    // other (duplicate) video still points at it.
+    if let Some(checksum) = video.checksum.as_deref().filter(|c| !c.is_empty()) {
+        let still_shared: i64 = videos::table
+            .filter(videos::checksum.eq(checksum))
+            .count()
+            .get_result(conn)
+            .unwrap_or(0);
+        if still_shared == 0 {
+            let _ = std::fs::remove_dir_all(thumbnail_dir.join(checksum));
+        }
+    }
+
+    let mut outcome = DeleteVideoOutcome { file_deleted: false, file_error: None };
+    if delete_file {
+        let path = std::path::Path::new(&video.file_path);
+        if !path.exists() {
+            outcome.file_deleted = true; // already gone from disk
+        } else {
+            match std::fs::remove_file(path) {
+                Ok(()) => outcome.file_deleted = true,
+                Err(e) => outcome.file_error = Some(e.to_string()),
+            }
+        }
+    }
+    Ok(outcome)
 }
 
 /// Bulk update multiple videos

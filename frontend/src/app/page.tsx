@@ -305,6 +305,7 @@ export default function HomePage() {
       <BulkActions
         selectedCount={selectedVideoIds.size}
         selectedVideoIds={Array.from(selectedVideoIds)}
+        selectedVideos={videos.filter((v) => selectedVideoIds.has(v.id))}
         onClearSelection={handleClearSelection}
         onUpdate={() => {
           loadData();

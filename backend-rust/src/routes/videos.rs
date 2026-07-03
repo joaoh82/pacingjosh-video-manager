@@ -2,8 +2,10 @@ use actix_web::{get, post, put, delete, web, HttpResponse};
 use chrono::NaiveDateTime;
 use serde::Deserialize;
 
+use crate::config::ConfigManager;
 use crate::db::DbPool;
 use crate::models::*;
+use crate::services::video_service::DeleteVideoError;
 use crate::services::{video_service, search_service};
 
 #[derive(Deserialize)]
@@ -105,22 +107,58 @@ async fn update_video(
     }
 }
 
+#[derive(Deserialize)]
+pub struct DeleteVideoParams {
+    /// Also remove the source file from disk (default: library-only delete).
+    pub delete_file: Option<bool>,
+}
+
 #[delete("/videos/{video_id}")]
 async fn delete_video(
     pool: web::Data<DbPool>,
+    config: web::Data<ConfigManager>,
     path: web::Path<i32>,
+    query: web::Query<DeleteVideoParams>,
 ) -> HttpResponse {
     let mut conn = pool.get().expect("Failed to get DB connection");
     let video_id = path.into_inner();
+    let delete_file = query.delete_file.unwrap_or(false);
+    let thumbnail_dir = config.get_thumbnail_directory();
 
-    if video_service::delete_video(&mut conn, video_id) {
-        HttpResponse::Ok().json(serde_json::json!({
-            "message": format!("Video {} deleted", video_id),
-        }))
-    } else {
-        HttpResponse::NotFound().json(serde_json::json!({
+    match video_service::delete_video_checked(&mut conn, video_id, delete_file, &thumbnail_dir) {
+        Ok(outcome) => {
+            let message = if !delete_file {
+                "Video removed from the library. The file remains on disk.".to_string()
+            } else if outcome.file_deleted {
+                "Video removed from the library and the file was deleted from disk.".to_string()
+            } else {
+                format!(
+                    "Video removed from the library, but the file could not be deleted: {}",
+                    outcome.file_error.as_deref().unwrap_or("unknown error")
+                )
+            };
+            HttpResponse::Ok().json(serde_json::json!({
+                "message": message,
+                "file_deleted": outcome.file_deleted,
+            }))
+        }
+        Err(DeleteVideoError::NotFound) => HttpResponse::NotFound().json(serde_json::json!({
             "detail": format!("Video not found: {}", video_id),
-        }))
+        })),
+        Err(DeleteVideoError::UsedInProductions(titles)) => {
+            HttpResponse::Conflict().json(serde_json::json!({
+                "detail": format!(
+                    "This video can't be deleted — it is used in the production{} {}. Remove it from the production{} first.",
+                    if titles.len() == 1 { "" } else { "s" },
+                    titles.join(", "),
+                    if titles.len() == 1 { "" } else { "s" },
+                ),
+                "productions": titles,
+            }))
+        }
+        Err(DeleteVideoError::Db(e)) => HttpResponse::InternalServerError().json(serde_json::json!({
+            "detail": format!("Failed to delete video: {}", e),
+        })),
     }
 }
 
