@@ -168,10 +168,12 @@ export default function VideoCard({
           </button>
         </div>
 
-        <div className="flex items-center justify-between text-sm text-gray-600 dark:text-gray-400 mb-2">
-          <span>{formatFileSize(video.file_size)}</span>
+        <div className="flex items-center justify-between gap-2 text-sm text-gray-600 dark:text-gray-400 mb-2">
+          <span className="flex-shrink-0">{formatFileSize(video.file_size)}</span>
           {video.created_date && (
-            <span>{format(new Date(video.created_date), 'MMM d, yyyy')}</span>
+            <span className="whitespace-nowrap text-right">
+              {format(new Date(video.created_date), 'MMM d, yyyy · h:mm a')}
+            </span>
           )}
         </div>
 

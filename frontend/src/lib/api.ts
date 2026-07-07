@@ -170,8 +170,11 @@ export async function getVideos(
   if (filters.tags.length) params.set('tags', filters.tags.join(','));
   if (filters.production !== null) params.set('production', String(filters.production));
   if (filters.orientation) params.set('orientation', filters.orientation);
-  if (filters.dateFrom) params.set('date_from', filters.dateFrom.toISOString());
-  if (filters.dateTo) params.set('date_to', filters.dateTo.toISOString());
+  // Send date-only (YYYY-MM-DD). The backend applies the day boundaries itself
+  // (00:00:00 for `from`, 23:59:59 for `to`); a full ISO timestamp with the
+  // trailing `.000Z` fails its parser and the filter is silently dropped.
+  if (filters.dateFrom) params.set('date_from', filters.dateFrom.toISOString().split('T')[0]);
+  if (filters.dateTo) params.set('date_to', filters.dateTo.toISOString().split('T')[0]);
   params.set('sort', filters.sort);
   params.set('page', String(pagination.page));
   params.set('limit', String(pagination.limit));
