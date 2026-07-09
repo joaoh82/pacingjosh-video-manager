@@ -9,8 +9,11 @@ import {
   isTauri,
   getAiSettings,
   saveAiSettings,
+  getIndexStatus,
+  reindexSearch,
+  getReindexStatus,
 } from '@/lib/api';
-import type { AiSettings, AiSettingsUpdate } from '@/lib/types';
+import type { AiSettings, AiSettingsUpdate, IndexStatus, ReindexProgress } from '@/lib/types';
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -32,6 +35,14 @@ export default function SettingsPage() {
   const [isSavingAi, setIsSavingAi] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiSuccess, setAiSuccess] = useState<string | null>(null);
+
+  // Semantic search index (desktop only)
+  const [indexStatus, setIndexStatus] = useState<IndexStatus | null>(null);
+  const [reindexJobId, setReindexJobId] = useState<string | null>(null);
+  const [reindexProgress, setReindexProgress] = useState<ReindexProgress | null>(null);
+  const [reindexError, setReindexError] = useState<string | null>(null);
+  const [transcribeMissing, setTranscribeMissing] = useState(false);
+  const [describeVisuals, setDescribeVisuals] = useState(false);
 
   useEffect(() => {
     loadSettings();
@@ -60,6 +71,8 @@ export default function SettingsPage() {
           transcription_model: ai.transcription_model,
           image_provider: ai.image_provider,
           image_model: ai.image_model,
+          embedding_provider: ai.embedding_provider,
+          embedding_model: ai.embedding_model,
           system_prompt: ai.system_prompt,
           edit_prompt: ai.edit_prompt,
           short_edit_prompt: ai.short_edit_prompt,
@@ -67,6 +80,52 @@ export default function SettingsPage() {
       } catch {
         // AI settings are optional; ignore load failures.
       }
+      try {
+        setIndexStatus(await getIndexStatus());
+      } catch {
+        // Index status is optional; ignore load failures.
+      }
+    }
+  };
+
+  // Poll a running reindex job until it finishes, then refresh coverage.
+  useEffect(() => {
+    if (!reindexJobId) return;
+    let active = true;
+    const tick = async () => {
+      try {
+        const p = await getReindexStatus(reindexJobId);
+        if (!active) return;
+        setReindexProgress(p);
+        if (p.status === 'in_progress') {
+          setTimeout(tick, 1500);
+        } else {
+          setReindexJobId(null);
+          if (p.status === 'failed') setReindexError(p.error || 'Reindex failed');
+          try {
+            setIndexStatus(await getIndexStatus());
+          } catch {
+            /* ignore */
+          }
+        }
+      } catch {
+        if (active) setReindexJobId(null);
+      }
+    };
+    tick();
+    return () => {
+      active = false;
+    };
+  }, [reindexJobId]);
+
+  const handleReindex = async () => {
+    setReindexError(null);
+    setReindexProgress(null);
+    try {
+      const res = await reindexSearch(transcribeMissing, describeVisuals);
+      setReindexJobId(res.job_id);
+    } catch (err: any) {
+      setReindexError(err.message || 'Failed to start reindex');
     }
   };
 
@@ -280,6 +339,7 @@ export default function SettingsPage() {
 
         {/* AI / LLM Settings (desktop only) */}
         {showAi && (
+          <>
           <form onSubmit={handleSaveAi} className="mt-6 space-y-6">
             <div className="card">
               <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-1">
@@ -395,6 +455,42 @@ export default function SettingsPage() {
                     onChange={(e) => setAiForm({ ...aiForm, image_model: e.target.value })}
                     className="input"
                     placeholder="e.g. gemini-2.5-flash-image, gpt-image-1, gpt-image-2"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Embedding (search) provider
+                  </label>
+                  <select
+                    value={aiForm.embedding_provider || 'openai'}
+                    onChange={(e) => {
+                      const provider = e.target.value;
+                      // Model ids are provider-specific — re-seed the default.
+                      const defaultModel =
+                        provider === 'openai' ? 'text-embedding-3-small' :
+                        provider === 'gemini' ? 'text-embedding-004' : '';
+                      setAiForm({
+                        ...aiForm,
+                        embedding_provider: provider,
+                        embedding_model: defaultModel || aiForm.embedding_model,
+                      });
+                    }}
+                    className="input"
+                  >
+                    <option value="openai">OpenAI</option>
+                    <option value="gemini">Google Gemini</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Embedding (search) model
+                  </label>
+                  <input
+                    type="text"
+                    value={aiForm.embedding_model || ''}
+                    onChange={(e) => setAiForm({ ...aiForm, embedding_model: e.target.value })}
+                    className="input"
+                    placeholder="e.g. text-embedding-3-small, text-embedding-004"
                   />
                 </div>
               </div>
@@ -581,6 +677,149 @@ export default function SettingsPage() {
               </div>
             </div>
           </form>
+
+          {/* Semantic search index */}
+          <div className="card mt-6">
+            <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-1">
+              Semantic search index
+            </h2>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+              Powers the ✨ Semantic toggle on the videos page — searching by meaning
+              (&ldquo;me talking about parenting&rdquo;) instead of exact keywords. Build the
+              index after scanning or generating transcripts; rebuilds are incremental
+              (only changed videos are re-embedded). Uses your{' '}
+              <strong>{aiForm.embedding_provider || 'openai'}</strong> API key.
+            </p>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+              Only videos with <strong>describable text</strong> are indexed — a transcript,
+              tags, notes, a category, or a descriptive filename. Raw clips whose only text is
+              a camera filename (e.g. <code className="px-1 bg-gray-100 dark:bg-gray-700 rounded">GX011916.MP4</code>)
+              are skipped, so <code className="px-1 bg-gray-100 dark:bg-gray-700 rounded">indexed</code> is
+              usually lower than the total. To make more videos searchable, add tags/notes or
+              generate transcripts. (Semantic search is text-only — it can&apos;t match purely
+              visual content that nothing describes.)
+            </p>
+
+            {indexStatus && (
+              <div className="text-sm text-gray-700 dark:text-gray-300 space-y-1 mb-4">
+                <p>
+                  Videos indexed:{' '}
+                  <strong>
+                    {indexStatus.videos_indexed} / {indexStatus.videos_total}
+                  </strong>
+                </p>
+                <p>
+                  Productions indexed:{' '}
+                  <strong>
+                    {indexStatus.productions_indexed} / {indexStatus.productions_total}
+                  </strong>
+                </p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  Model: <code className="px-1 bg-gray-100 dark:bg-gray-700 rounded">{indexStatus.model}</code>
+                </p>
+              </div>
+            )}
+
+            {reindexProgress && reindexProgress.status === 'in_progress' && (() => {
+              const p = reindexProgress;
+              let done = p.processed;
+              let tot = p.total;
+              let label = `${p.stage} — `;
+              if (p.stage === 'transcribing') {
+                done = p.transcribed + p.transcribe_failed;
+                tot = p.transcribe_total;
+                label = 'Transcribing videos without a transcript… ';
+              } else if (p.stage === 'describing') {
+                done = p.described + p.describe_failed;
+                tot = p.describe_total;
+                label = 'Describing visuals from thumbnails… ';
+              }
+              const pct = tot > 0 ? Math.round((done / tot) * 100) : 0;
+              return (
+                <div className="mb-4">
+                  <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 overflow-hidden">
+                    <div className="bg-primary-600 h-2 transition-all" style={{ width: `${pct}%` }} />
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    {label}
+                    {done} / {tot}
+                  </p>
+                </div>
+              );
+            })()}
+
+            {reindexProgress && reindexProgress.status === 'completed' && (
+              <p className="mb-4 text-sm text-green-600 dark:text-green-400">
+                Index built — {reindexProgress.videos_indexed} videos and{' '}
+                {reindexProgress.productions_indexed} productions embedded (
+                {reindexProgress.videos_skipped + reindexProgress.productions_skipped} unchanged)
+                {reindexProgress.transcribe_total > 0
+                  ? `. Transcribed ${reindexProgress.transcribed} clip${reindexProgress.transcribed === 1 ? '' : 's'}${
+                      reindexProgress.transcribe_failed > 0 ? ` (${reindexProgress.transcribe_failed} failed)` : ''
+                    }`
+                  : ''}
+                {reindexProgress.describe_total > 0
+                  ? `. Described ${reindexProgress.described} clip${reindexProgress.described === 1 ? '' : 's'}${
+                      reindexProgress.describe_failed > 0 ? ` (${reindexProgress.describe_failed} failed)` : ''
+                    }`
+                  : ''}
+                .
+              </p>
+            )}
+
+            {reindexError && (
+              <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+                <p className="text-sm text-red-600 dark:text-red-400">{reindexError}</p>
+              </div>
+            )}
+
+            <label className="flex items-start gap-2 mb-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={transcribeMissing}
+                onChange={(e) => setTranscribeMissing(e.target.checked)}
+                disabled={!!reindexJobId}
+                className="mt-0.5 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              />
+              <span className="text-xs text-gray-600 dark:text-gray-400">
+                <strong>Transcribe videos with no transcript first.</strong> Much slower and uses
+                your <strong>{aiForm.transcription_provider || 'elevenlabs'}</strong> transcription
+                API, but makes talking videos searchable by what&apos;s said. Silent / action clips
+                (no speech) are skipped. Already-transcribed videos are never redone.
+              </span>
+            </label>
+
+            <label className="flex items-start gap-2 mb-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={describeVisuals}
+                onChange={(e) => setDescribeVisuals(e.target.checked)}
+                disabled={!!reindexJobId}
+                className="mt-0.5 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              />
+              <span className="text-xs text-gray-600 dark:text-gray-400">
+                <strong>Describe visuals for videos with no description first.</strong> Analyzes a
+                few thumbnails of each clip with your <strong>{aiForm.text_provider || 'gemini'}</strong>{' '}
+                vision LLM and stores a short caption + tags — so <em>visual</em> content
+                (&ldquo;running in the snow&rdquo;) becomes searchable even with no transcript.
+                Slower and costs LLM API money per clip; already-described videos are never redone.
+              </span>
+            </label>
+
+            <button
+              type="button"
+              onClick={handleReindex}
+              disabled={!!reindexJobId}
+              className="btn btn-primary"
+            >
+              {reindexJobId
+                ? 'Building…'
+                : transcribeMissing || describeVisuals
+                ? 'Analyze + rebuild index'
+                : 'Rebuild index'}
+            </button>
+          </div>
+          </>
         )}
 
         {/* Additional Info */}

@@ -7,6 +7,7 @@ import {
   createProduction,
   updateProduction,
   deleteProduction,
+  semanticSearchProductions,
   isTauri,
 } from '@/lib/api';
 import VideoEditPipeline from './VideoEditPipeline';
@@ -57,6 +58,13 @@ export default function ProductionManager({
   const [productions, setProductions] = useState<Production[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  // Semantic (meaning-based) search over productions — ranks by their title,
+  // script, take transcripts and copy. Runs on Enter; falls back to the instant
+  // client-side text filter when off.
+  const [semantic, setSemantic] = useState(false);
+  const [semanticResults, setSemanticResults] = useState<Production[] | null>(null);
+  const [semanticLoading, setSemanticLoading] = useState(false);
+  const [semanticError, setSemanticError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [formTitle, setFormTitle] = useState('');
   const [formPlatform, setFormPlatform] = useState('');
@@ -176,12 +184,46 @@ export default function ProductionManager({
     }
   }
 
+  async function runSemanticSearch() {
+    const q = searchTerm.trim();
+    if (!q) return;
+    setSemanticLoading(true);
+    setSemanticError(null);
+    try {
+      const res = await semanticSearchProductions(q, 30);
+      if (res.index_empty) {
+        setSemanticError(
+          'The semantic index is empty. Build it in Settings → AI / LLM → Rebuild index.'
+        );
+        setSemanticResults([]);
+      } else {
+        setSemanticResults(res.productions);
+      }
+    } catch (err: any) {
+      setSemanticError(err.message || 'Semantic search failed');
+      setSemanticResults([]);
+    } finally {
+      setSemanticLoading(false);
+    }
+  }
+
+  function toggleSemantic() {
+    const next = !semantic;
+    setSemantic(next);
+    setSemanticError(null);
+    setSemanticResults(null);
+  }
+
   const filtered = productions.filter(
     (p) =>
       p.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
       (p.platform || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
       (p.link || '').toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  // In semantic mode, show the ranked results once a search has run; otherwise
+  // the instant client-side text filter.
+  const displayList = semantic && semanticResults !== null ? semanticResults : filtered;
 
   return (
     <>
@@ -303,28 +345,54 @@ export default function ProductionManager({
             </div>
 
             {/* Search */}
-            <input
-              type="text"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="input"
-              placeholder="Search productions..."
-            />
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && semantic) runSemanticSearch();
+                }}
+                className="input flex-1"
+                placeholder={
+                  semantic
+                    ? "Describe it — e.g. 'video about parenting' (press Enter)"
+                    : 'Search productions...'
+                }
+              />
+              <button
+                type="button"
+                onClick={toggleSemantic}
+                className={`btn text-sm whitespace-nowrap ${
+                  semantic ? 'btn-primary' : 'btn-secondary'
+                }`}
+                title="Semantic (AI) search — rank productions by meaning"
+              >
+                ✨ Semantic{semantic ? ' ✓' : ''}
+              </button>
+            </div>
+            {semantic && semanticError && (
+              <p className="text-xs text-red-600 dark:text-red-400">{semanticError}</p>
+            )}
 
             {/* List */}
-            {isLoading ? (
+            {isLoading || semanticLoading ? (
               <div className="text-center py-8">
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600 mx-auto" />
               </div>
-            ) : filtered.length === 0 ? (
+            ) : displayList.length === 0 ? (
               <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-4 italic">
                 {productions.length === 0
                   ? 'No productions yet. Add one above.'
+                  : semantic && semanticResults !== null
+                  ? 'No productions match your description.'
+                  : semantic
+                  ? 'Type a description and press Enter to search by meaning.'
                   : 'No productions match your search.'}
               </p>
             ) : (
               <div className="space-y-2">
-                {filtered.map((prod) => (
+                {displayList.map((prod) => (
                   <div
                     key={prod.id}
                     className="flex items-center justify-between p-3 bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg"

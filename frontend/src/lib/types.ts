@@ -87,6 +87,10 @@ export interface AiSettings {
   image_provider: string;
   /** Model id for AI image generation/editing. */
   image_model: string;
+  /** Provider used for semantic-search embeddings: "openai" | "gemini". */
+  embedding_provider: string;
+  /** Model id for semantic-search embeddings. */
+  embedding_model: string;
   gemini_api_key_set: boolean;
   openai_api_key_set: boolean;
   anthropic_api_key_set: boolean;
@@ -113,6 +117,8 @@ export interface AiSettingsUpdate {
   transcription_model?: string;
   image_provider?: string;
   image_model?: string;
+  embedding_provider?: string;
+  embedding_model?: string;
   gemini_api_key?: string;
   openai_api_key?: string;
   anthropic_api_key?: string;
@@ -139,6 +145,8 @@ export interface AiGeneration {
   provider?: string | null;
   model?: string | null;
   generated_at: string;
+  /** Vision-LLM description of what the video shows (for semantic search). */
+  visual_description?: string | null;
 }
 
 /** Payload for updating a single video's metadata. */
@@ -448,4 +456,65 @@ export interface BuiltinOverlay {
   id: string;
   label: string;
   path: string;
+}
+
+// --- Semantic search ---
+
+/** Ranked video results for a natural-language query. `index_empty` is true when
+ * nothing has been indexed yet for the current embedding model. `weak_match` is
+ * true when the top results are all tied (no meaningfully-relevant match). */
+export interface SemanticVideoResponse {
+  videos: Video[];
+  total: number;
+  index_empty: boolean;
+  weak_match: boolean;
+}
+
+/** Ranked production results for a natural-language query. */
+export interface SemanticProductionResponse {
+  productions: Production[];
+  total: number;
+  index_empty: boolean;
+  weak_match: boolean;
+}
+
+/** Coverage of the semantic index for the current embedding model. */
+export interface IndexStatus {
+  /** The `provider:model` the current index was built with. */
+  model: string;
+  videos_total: number;
+  videos_indexed: number;
+  productions_total: number;
+  productions_indexed: number;
+}
+
+/** Live progress for a background semantic-index (re)build. */
+export interface ReindexProgress {
+  job_id: string;
+  status: 'in_progress' | 'completed' | 'failed';
+  stage: string;
+  total: number;
+  processed: number;
+  videos_indexed: number;
+  videos_skipped: number;
+  productions_indexed: number;
+  productions_skipped: number;
+  /** Progress of the optional "transcribe missing" pre-pass. */
+  transcribed: number;
+  transcribe_total: number;
+  transcribe_failed: number;
+  /** Progress of the optional "describe visuals" pre-pass. */
+  described: number;
+  describe_total: number;
+  describe_failed: number;
+  error?: string | null;
+  start_time: string;
+  end_time?: string | null;
+}
+
+/** Response from starting a background reindex. */
+export interface ReindexStartResponse {
+  status: string;
+  job_id: string;
+  message: string;
 }

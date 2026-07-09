@@ -6,3 +6,4 @@ pub mod scanner;
 pub mod ai_service;
 pub mod edit_service;
 pub mod overlay_service;
+pub mod embedding_service;

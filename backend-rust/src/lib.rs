@@ -23,6 +23,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::config::ConfigManager;
 use crate::services::edit_service::EditJobMap;
+use crate::services::embedding_service::SearchIndexMap;
 use crate::services::ffmpeg_service::FfmpegPaths;
 use crate::services::scanner::ScanMap;
 
@@ -97,6 +98,9 @@ pub async fn run(paths: BackendPaths) -> std::io::Result<()> {
     // Edit pipeline progress map
     let edit_map: EditJobMap = Arc::new(Mutex::new(HashMap::new()));
 
+    // Semantic-search reindex progress map
+    let search_index_map: SearchIndexMap = Arc::new(Mutex::new(HashMap::new()));
+
     let cors_origins = settings.cors_origins.clone();
 
     println!("============================================================");
@@ -116,6 +120,7 @@ pub async fn run(paths: BackendPaths) -> std::io::Result<()> {
     let pool_data = web::Data::new(pool);
     let scan_data = web::Data::new(scan_map);
     let edit_data = web::Data::new(edit_map);
+    let search_index_data = web::Data::new(search_index_map);
 
     HttpServer::new(move || {
         let cors = Cors::default()
@@ -144,6 +149,7 @@ pub async fn run(paths: BackendPaths) -> std::io::Result<()> {
             .app_data(pool_data.clone())
             .app_data(scan_data.clone())
             .app_data(edit_data.clone())
+            .app_data(search_index_data.clone())
             .service(root)
             .service(health)
             .service(
@@ -155,7 +161,8 @@ pub async fn run(paths: BackendPaths) -> std::io::Result<()> {
                     .configure(routes::stream::configure)
                     .configure(routes::productions::configure)
                     .configure(routes::ai::configure)
-                    .configure(routes::edit::configure),
+                    .configure(routes::edit::configure)
+                    .configure(routes::search::configure),
             )
     })
     .bind(paths.bind_addr)?

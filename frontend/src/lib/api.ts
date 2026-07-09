@@ -16,6 +16,11 @@ import type {
   ThumbnailTextStyle,
   BuiltinOverlay,
   OverlaySpecPayload,
+  SemanticVideoResponse,
+  SemanticProductionResponse,
+  IndexStatus,
+  ReindexProgress,
+  ReindexStartResponse,
 } from './types';
 
 declare global {
@@ -584,4 +589,57 @@ export async function saveEditThumbnail(
     method: 'POST',
     body: JSON.stringify(payload),
   });
+}
+
+// --- Semantic search ---
+
+/**
+ * Rank videos by semantic similarity to a natural-language query (e.g. "me
+ * running in the snow"). Requires the semantic index to be built first
+ * (Settings → AI / LLM → Rebuild index) and an embedding API key configured.
+ */
+export async function semanticSearchVideos(
+  query: string,
+  limit = 30
+): Promise<SemanticVideoResponse> {
+  const params = new URLSearchParams({ q: query, type: 'videos', limit: String(limit) });
+  return fetchApi<SemanticVideoResponse>(`/api/search/semantic?${params.toString()}`);
+}
+
+/** Rank productions by semantic similarity to a natural-language query. */
+export async function semanticSearchProductions(
+  query: string,
+  limit = 30
+): Promise<SemanticProductionResponse> {
+  const params = new URLSearchParams({ q: query, type: 'productions', limit: String(limit) });
+  return fetchApi<SemanticProductionResponse>(`/api/search/semantic?${params.toString()}`);
+}
+
+/** Coverage of the semantic index for the current embedding model. */
+export async function getIndexStatus(): Promise<IndexStatus> {
+  return fetchApi<IndexStatus>('/api/search/index-status');
+}
+
+/**
+ * Start a background (re)build of the semantic index. Poll with getReindexStatus.
+ * `transcribeMissing` first transcribes videos with no transcript (uses the
+ * transcription API); `describeVisuals` first captions un-described videos from
+ * their thumbnails via the vision LLM (uses the text/LLM API). Both are slower.
+ */
+export async function reindexSearch(
+  transcribeMissing = false,
+  describeVisuals = false
+): Promise<ReindexStartResponse> {
+  return fetchApi<ReindexStartResponse>('/api/search/reindex', {
+    method: 'POST',
+    body: JSON.stringify({
+      transcribe_missing: transcribeMissing,
+      describe_visuals: describeVisuals,
+    }),
+  });
+}
+
+/** Poll live progress for a running (or finished) reindex job. */
+export async function getReindexStatus(jobId: string): Promise<ReindexProgress> {
+  return fetchApi<ReindexProgress>(`/api/search/reindex/status/${jobId}`);
 }

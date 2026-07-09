@@ -19,6 +19,8 @@ async fn get_ai_settings(config: web::Data<ConfigManager>) -> HttpResponse {
         "transcription_model": ai.transcription_model,
         "image_provider": ai.image_provider,
         "image_model": ai.image_model,
+        "embedding_provider": ai.embedding_provider,
+        "embedding_model": ai.embedding_model,
         "gemini_api_key_set": key_set(&ai.gemini_api_key),
         "openai_api_key_set": key_set(&ai.openai_api_key),
         "anthropic_api_key_set": key_set(&ai.anthropic_api_key),
@@ -44,6 +46,9 @@ pub struct AiSettingsRequest {
     pub transcription_model: Option<String>,
     pub image_provider: Option<String>,
     pub image_model: Option<String>,
+    /// Embedding provider/model for semantic search ("openai" | "gemini").
+    pub embedding_provider: Option<String>,
+    pub embedding_model: Option<String>,
     /// Blank or omitted leaves the stored key unchanged.
     pub gemini_api_key: Option<String>,
     pub openai_api_key: Option<String>,
@@ -73,6 +78,8 @@ async fn save_ai_settings(
     if let Some(v) = &body.transcription_model { ai.transcription_model = v.clone(); }
     if let Some(v) = &body.image_provider { ai.image_provider = v.clone(); }
     if let Some(v) = &body.image_model { ai.image_model = v.clone(); }
+    if let Some(v) = &body.embedding_provider { ai.embedding_provider = v.clone(); }
+    if let Some(v) = &body.embedding_model { ai.embedding_model = v.clone(); }
 
     // Keys are write-only: only overwrite when a non-empty value is supplied.
     update_key(&mut ai.gemini_api_key, &body.gemini_api_key);

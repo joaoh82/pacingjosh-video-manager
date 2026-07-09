@@ -71,15 +71,14 @@ export default function VideoModal({
         .then(setAllProductions)
         .catch(() => {});
 
-      // Load any previously-generated AI content for portrait videos.
+      // Load any previously-generated AI content. Fetched for every video (not
+      // just portrait) so the semantic-search "visual description" shows too.
       setAiGen(null);
       setAiError(null);
       setTranscriptOpen(false);
-      if (isTauri() && video.orientation === 'portrait') {
-        getAiGeneration(video.id)
-          .then((gen) => setAiGen(gen))
-          .catch(() => {});
-      }
+      getAiGeneration(video.id)
+        .then((gen) => setAiGen(gen))
+        .catch(() => {});
     } else {
       document.body.style.overflow = 'unset';
     }
@@ -476,6 +475,21 @@ export default function VideoModal({
                         </div>
                       )}
 
+                      {aiGen?.visual_description && (
+                        <div>
+                          <span className="text-sm font-medium text-gray-600 dark:text-gray-400">
+                            ✨ Visual description (AI):
+                          </span>
+                          <p className="text-gray-900 dark:text-white mt-1 whitespace-pre-wrap">
+                            {aiGen.visual_description}
+                          </p>
+                          <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                            Auto-generated from thumbnails for semantic search. Rebuild the index
+                            (Settings) with &ldquo;Describe visuals&rdquo; to (re)generate.
+                          </p>
+                        </div>
+                      )}
+
                       {(currentVideo.productions || []).length > 0 && (
                         <div>
                           <span className="text-sm font-medium text-gray-600 dark:text-gray-400">Productions:</span>
@@ -512,6 +526,7 @@ export default function VideoModal({
 
                       {!currentVideo.metadata?.category && !currentVideo.metadata?.location &&
                        currentVideo.tags.length === 0 && !currentVideo.metadata?.notes &&
+                       !aiGen?.visual_description &&
                        (currentVideo.productions || []).length === 0 && (
                         <p className="text-gray-500 dark:text-gray-400 text-sm italic">
                           No metadata available. Click Edit to add information.

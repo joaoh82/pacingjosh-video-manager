@@ -48,7 +48,7 @@ Pre-built installers for every release are published on the **[Releases page →
 ## 📖 Documentation
 
 - [**User Guide**](docs/user-guide.md) — how to scan, search, tag, manage productions, run the edit pipeline, and edit the cut on the interactive timeline.
-- [**AI Features**](docs/ai-features.md) — transcription, AI cut planning, AI timeline edits, social/YouTube copy, and thumbnail styling (text + frame restyle): providers, keys, and tips.
+- [**AI Features**](docs/ai-features.md) — transcription, AI cut planning, AI timeline edits, social/YouTube copy, thumbnail styling (text + frame restyle), and semantic search: providers, keys, and tips.
 - [**Data storage**](docs/data-storage.md) — where the index, thumbnails, settings, and rendered outputs live, plus backup/reset/uninstall.
 
 ## Features
@@ -63,6 +63,7 @@ Pre-built installers for every release are published on the **[Releases page →
 ### Organization & Search
 
 - **Full-Text Search** - Search across filenames, locations, and notes
+- **✨ Semantic Search** - Find videos & productions by meaning, not just keywords (e.g. *"me running in the snow"* or *"video where I talk about parenting"*) — ranks by embedding similarity over each item's metadata, tags, transcript, and (optionally) AI‑generated transcripts and **visual descriptions** of the footage. Desktop; needs an OpenAI/Gemini key. See [AI Features](docs/ai-features.md#7-semantic-search-natural-language-search).
 - **Tagging System** - Multi-tag support with tag management
 - **Categories** - Organize videos into categories
 - **Date Filtering** - Filter by date range
@@ -291,6 +292,10 @@ npm run dev
 **Search:**
 
 - Use the search bar to find videos by filename, location, or notes
+- Toggle **✨ Semantic** next to the search bar to search by meaning instead of exact
+  keywords — type a description (e.g. *"me talking about parenting"*) and press Enter.
+  The Production Manager has the same toggle. Build the index once under
+  **Settings → AI / LLM → Semantic search index** (desktop; needs an embedding key).
 
 **Filters:**
 

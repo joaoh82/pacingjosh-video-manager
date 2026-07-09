@@ -22,6 +22,9 @@ pub struct AiGeneration {
     pub provider: Option<String>,
     pub model: Option<String>,
     pub generated_at: NaiveDateTime,
+    /// Vision-LLM caption + tags describing what the video shows (for semantic
+    /// search). Null until the "describe visuals" pass runs.
+    pub visual_description: Option<String>,
 }
 
 #[derive(Debug, Insertable, AsChangeset)]
@@ -39,6 +42,7 @@ pub struct NewAiGeneration {
     pub provider: Option<String>,
     pub model: Option<String>,
     pub generated_at: NaiveDateTime,
+    pub visual_description: Option<String>,
 }
 
 /// API-facing shape with JSON-array columns decoded into `Vec<String>`.
@@ -56,6 +60,8 @@ pub struct AiGenerationResponse {
     pub provider: Option<String>,
     pub model: Option<String>,
     pub generated_at: NaiveDateTime,
+    /// Vision-LLM description of what the video shows (for semantic search).
+    pub visual_description: Option<String>,
 }
 
 impl From<AiGeneration> for AiGenerationResponse {
@@ -89,6 +95,7 @@ impl From<AiGeneration> for AiGenerationResponse {
             provider: g.provider,
             model: g.model,
             generated_at: g.generated_at,
+            visual_description: g.visual_description,
         }
     }
 }

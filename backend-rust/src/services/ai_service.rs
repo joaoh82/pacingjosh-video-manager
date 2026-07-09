@@ -787,6 +787,315 @@ async fn generate_anthropic(prompt: &str, ai: &AiSettings, max_tokens: u32) -> R
         .ok_or_else(|| "Anthropic returned no content".to_string())
 }
 
+// --- Embeddings --------------------------------------------------------------
+
+/// Embed a batch of texts using the configured embedding provider, returning one
+/// vector per input in the same order. Used by semantic search to index the
+/// video/production library and to embed a query. Reuses the provider's stored
+/// API key (OpenAI or Gemini).
+pub async fn embed_texts(texts: &[String], ai: &AiSettings) -> Result<Vec<Vec<f32>>, String> {
+    if texts.is_empty() {
+        return Ok(Vec::new());
+    }
+    match ai.embedding_provider.as_str() {
+        "openai" => embed_openai(texts, ai).await,
+        "gemini" => embed_gemini(texts, ai).await,
+        other => Err(format!("Unsupported embedding provider: {}", other)),
+    }
+}
+
+/// OpenAI embeddings (`/v1/embeddings`). A single request accepts an array of
+/// inputs and returns one vector per input; results are re-sorted by the `index`
+/// field so ordering matches the input regardless of response order.
+async fn embed_openai(texts: &[String], ai: &AiSettings) -> Result<Vec<Vec<f32>>, String> {
+    let key = ai
+        .openai_api_key
+        .as_deref()
+        .filter(|k| !k.is_empty())
+        .ok_or("An OpenAI API key is required for semantic search (add it under Settings → AI / LLM).")?;
+
+    let body = serde_json::json!({
+        "model": ai.embedding_model,
+        "input": texts,
+    });
+
+    let resp = client()
+        .post(format!("{}/embeddings", OPENAI_BASE))
+        .bearer_auth(key)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("OpenAI request failed: {}", e))?;
+
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("OpenAI embeddings error ({}): {}", status, truncate_err(&text)));
+    }
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("Bad OpenAI response: {}", e))?;
+    let data = parsed["data"]
+        .as_array()
+        .ok_or("OpenAI embeddings response missing `data`")?;
+
+    // Collect (index, vector) then sort by index so order matches the input.
+    let mut indexed: Vec<(usize, Vec<f32>)> = Vec::with_capacity(data.len());
+    for item in data {
+        let idx = item["index"].as_u64().unwrap_or(indexed.len() as u64) as usize;
+        let vec = json_to_f32_vec(&item["embedding"])
+            .ok_or("OpenAI embedding item had no numeric vector")?;
+        indexed.push((idx, vec));
+    }
+    indexed.sort_by_key(|(i, _)| *i);
+    Ok(indexed.into_iter().map(|(_, v)| v).collect())
+}
+
+/// Gemini embeddings via `:batchEmbedContents`. Each request carries the model
+/// (prefixed with `models/` when the id omits it) and the text part; the
+/// response's `embeddings[].values` arrays come back in request order.
+async fn embed_gemini(texts: &[String], ai: &AiSettings) -> Result<Vec<Vec<f32>>, String> {
+    let key = ai
+        .gemini_api_key
+        .as_deref()
+        .filter(|k| !k.is_empty())
+        .ok_or("A Gemini API key is required for semantic search (add it under Settings → AI / LLM).")?;
+
+    let model_path = if ai.embedding_model.starts_with("models/") {
+        ai.embedding_model.clone()
+    } else {
+        format!("models/{}", ai.embedding_model)
+    };
+
+    let requests: Vec<serde_json::Value> = texts
+        .iter()
+        .map(|t| {
+            serde_json::json!({
+                "model": model_path,
+                "content": { "parts": [{ "text": t }] },
+            })
+        })
+        .collect();
+    let body = serde_json::json!({ "requests": requests });
+
+    let url = format!("{}/{}:batchEmbedContents?key={}", GEMINI_BASE, model_path.trim_start_matches("models/"), key);
+    let resp = client()
+        .post(url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Gemini request failed: {}", e))?;
+
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("Gemini embeddings error ({}): {}", status, truncate_err(&text)));
+    }
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("Bad Gemini response: {}", e))?;
+    let embeddings = parsed["embeddings"]
+        .as_array()
+        .ok_or("Gemini embeddings response missing `embeddings`")?;
+
+    let mut out = Vec::with_capacity(embeddings.len());
+    for e in embeddings {
+        let vec = json_to_f32_vec(&e["values"])
+            .ok_or("Gemini embedding item had no numeric vector")?;
+        out.push(vec);
+    }
+    Ok(out)
+}
+
+/// Parse a JSON array of numbers into `Vec<f32>`. Returns `None` if the value is
+/// not an array or contains a non-numeric entry.
+fn json_to_f32_vec(v: &serde_json::Value) -> Option<Vec<f32>> {
+    let arr = v.as_array()?;
+    let mut out = Vec::with_capacity(arr.len());
+    for n in arr {
+        out.push(n.as_f64()? as f32);
+    }
+    Some(out)
+}
+
+// --- Visual description (vision captioning) ----------------------------------
+
+const VISUAL_PROMPT: &str = "You are analyzing a few still frames sampled from a SINGLE short video. \
+Based ONLY on what is visible, describe what the video shows. Return STRICT JSON (no markdown, no \
+commentary) with EXACTLY these keys:\n\
+{\n\
+  \"summary\": \"1-2 sentences: the setting, the subject(s), and the main activity or action\",\n\
+  \"tags\": [\"5-12 short lowercase visual keywords: places, objects, actions, weather, time of day\"]\n\
+}\n\
+Describe only what is visible. Do not guess audio, names, or anything not shown.";
+
+/// Describe what a video shows from a few sampled thumbnail frames, using the
+/// configured TEXT/LLM provider (Gemini/OpenAI/Anthropic — all multimodal).
+/// Returns a compact "summary + tags" string ready to embed for semantic search.
+pub async fn describe_video_frames(frames: &[Vec<u8>], ai: &AiSettings) -> Result<String, String> {
+    if frames.is_empty() {
+        return Err("No frames to describe".to_string());
+    }
+    let raw = match ai.text_provider.as_str() {
+        "gemini" => describe_gemini(frames, ai).await,
+        "openai" => describe_openai(frames, ai).await,
+        "anthropic" => describe_anthropic(frames, ai).await,
+        other => Err(format!("Unsupported provider for vision: {}", other)),
+    }?;
+    let out = format_visual(&raw);
+    if out.trim().is_empty() {
+        return Err("The model returned an empty visual description".to_string());
+    }
+    Ok(out)
+}
+
+/// Flatten the model's `{summary, tags}` JSON into a single embeddable line.
+/// Falls back to the raw text when the response isn't the expected JSON.
+fn format_visual(raw: &str) -> String {
+    let json = extract_json(raw);
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(json) {
+        let summary = v["summary"].as_str().unwrap_or("").trim().to_string();
+        let tags: Vec<String> = v["tags"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|t| t.as_str())
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut out = summary;
+        if !tags.is_empty() {
+            if !out.is_empty() {
+                out.push(' ');
+            }
+            out.push_str(&format!("Tags: {}", tags.join(", ")));
+        }
+        if !out.trim().is_empty() {
+            return out;
+        }
+    }
+    raw.trim().to_string()
+}
+
+async fn describe_gemini(frames: &[Vec<u8>], ai: &AiSettings) -> Result<String, String> {
+    let key = ai
+        .gemini_api_key
+        .as_deref()
+        .filter(|k| !k.is_empty())
+        .ok_or("A Gemini API key is required for visual descriptions.")?;
+
+    let mut parts: Vec<serde_json::Value> = frames
+        .iter()
+        .map(|f| serde_json::json!({ "inline_data": { "mime_type": "image/jpeg", "data": STANDARD.encode(f) } }))
+        .collect();
+    parts.push(serde_json::json!({ "text": VISUAL_PROMPT }));
+
+    let body = serde_json::json!({
+        "contents": [{ "parts": parts }],
+        "generationConfig": { "responseMimeType": "application/json" }
+    });
+
+    let url = format!("{}/{}:generateContent?key={}", GEMINI_BASE, ai.text_model, key);
+    let resp = client().post(url).json(&body).send().await.map_err(|e| format!("Gemini request failed: {}", e))?;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("Gemini vision error ({}): {}", status, truncate_err(&text)));
+    }
+    gemini_extract_text(&text)
+}
+
+async fn describe_openai(frames: &[Vec<u8>], ai: &AiSettings) -> Result<String, String> {
+    let key = ai
+        .openai_api_key
+        .as_deref()
+        .filter(|k| !k.is_empty())
+        .ok_or("An OpenAI API key is required for visual descriptions.")?;
+
+    let mut content: Vec<serde_json::Value> = frames
+        .iter()
+        .map(|f| {
+            serde_json::json!({
+                "type": "image_url",
+                "image_url": { "url": format!("data:image/jpeg;base64,{}", STANDARD.encode(f)) }
+            })
+        })
+        .collect();
+    content.push(serde_json::json!({ "type": "text", "text": VISUAL_PROMPT }));
+
+    let body = serde_json::json!({
+        "model": ai.text_model,
+        "messages": [{ "role": "user", "content": content }],
+        "response_format": { "type": "json_object" }
+    });
+
+    let resp = client()
+        .post(format!("{}/chat/completions", OPENAI_BASE))
+        .bearer_auth(key)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("OpenAI request failed: {}", e))?;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("OpenAI vision error ({}): {}", status, truncate_err(&text)));
+    }
+    let parsed: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("Bad OpenAI response: {}", e))?;
+    parsed["choices"][0]["message"]["content"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| "OpenAI returned no content".to_string())
+}
+
+async fn describe_anthropic(frames: &[Vec<u8>], ai: &AiSettings) -> Result<String, String> {
+    let key = ai
+        .anthropic_api_key
+        .as_deref()
+        .filter(|k| !k.is_empty())
+        .ok_or("An Anthropic API key is required for visual descriptions.")?;
+
+    let mut content: Vec<serde_json::Value> = frames
+        .iter()
+        .map(|f| {
+            serde_json::json!({
+                "type": "image",
+                "source": { "type": "base64", "media_type": "image/jpeg", "data": STANDARD.encode(f) }
+            })
+        })
+        .collect();
+    content.push(serde_json::json!({ "type": "text", "text": VISUAL_PROMPT }));
+
+    let body = serde_json::json!({
+        "model": ai.text_model,
+        "max_tokens": 512,
+        "messages": [{ "role": "user", "content": content }]
+    });
+
+    let resp = client()
+        .post(format!("{}/messages", ANTHROPIC_BASE))
+        .header("x-api-key", key)
+        .header("anthropic-version", "2023-06-01")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Anthropic request failed: {}", e))?;
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("Anthropic vision error ({}): {}", status, truncate_err(&text)));
+    }
+    let parsed: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("Bad Anthropic response: {}", e))?;
+    parsed["content"][0]["text"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| "Anthropic returned no content".to_string())
+}
+
 // --- Helpers -----------------------------------------------------------------
 
 /// Pull `candidates[0].content.parts[*].text` out of a Gemini response.
@@ -838,6 +1147,7 @@ pub fn upsert_generation(
     provider: &str,
     model: &str,
 ) -> Result<AiGeneration, String> {
+    let existing = get_generation(conn, video_id);
     let record = NewAiGeneration {
         video_id,
         transcript: Some(transcript.to_string()),
@@ -851,9 +1161,10 @@ pub fn upsert_generation(
         provider: Some(provider.to_string()),
         model: Some(model.to_string()),
         generated_at: Utc::now().naive_utc(),
+        // Preserve any existing visual description — generating copy must not wipe it.
+        visual_description: existing.as_ref().and_then(|e| e.visual_description.clone()),
     };
 
-    let existing = get_generation(conn, video_id);
     let result = if existing.is_some() {
         diesel::update(ai_generations::table.filter(ai_generations::video_id.eq(video_id)))
             .set(&record)
@@ -870,6 +1181,86 @@ pub fn upsert_generation(
     }
 
     get_generation(conn, video_id).ok_or_else(|| "Failed to reload saved generation".to_string())
+}
+
+/// Insert or update ONLY the transcript for a video, leaving any existing social
+/// copy untouched. Used by the semantic re-index's "transcribe missing" step to
+/// give un-transcribed clips searchable text without generating copy.
+pub fn upsert_transcript(
+    conn: &mut SqliteConnection,
+    video_id: i32,
+    transcript: &str,
+    provider: &str,
+    model: &str,
+) -> Result<(), String> {
+    let now = Utc::now().naive_utc();
+    let result = if get_generation(conn, video_id).is_some() {
+        diesel::update(ai_generations::table.filter(ai_generations::video_id.eq(video_id)))
+            .set((
+                ai_generations::transcript.eq(Some(transcript.to_string())),
+                ai_generations::provider.eq(Some(provider.to_string())),
+                ai_generations::model.eq(Some(model.to_string())),
+                ai_generations::generated_at.eq(now),
+            ))
+            .execute(conn)
+    } else {
+        let record = NewAiGeneration {
+            video_id,
+            transcript: Some(transcript.to_string()),
+            thumbnail_text: None,
+            instagram_description: None,
+            tiktok_description: None,
+            youtube_short_title: None,
+            youtube_short_description: None,
+            youtube_short_tags: None,
+            hashtags: None,
+            provider: Some(provider.to_string()),
+            model: Some(model.to_string()),
+            generated_at: now,
+            visual_description: None,
+        };
+        diesel::insert_into(ai_generations::table).values(&record).execute(conn)
+    };
+
+    result.map(|_| ()).map_err(|e| format!("Failed to save transcript: {}", e))
+}
+
+/// Insert or update ONLY the visual description for a video (used by the semantic
+/// re-index's "describe visuals" step). Leaves the transcript and any social copy
+/// untouched.
+pub fn upsert_visual_description(
+    conn: &mut SqliteConnection,
+    video_id: i32,
+    description: &str,
+) -> Result<(), String> {
+    let now = Utc::now().naive_utc();
+    let result = if get_generation(conn, video_id).is_some() {
+        diesel::update(ai_generations::table.filter(ai_generations::video_id.eq(video_id)))
+            .set((
+                ai_generations::visual_description.eq(Some(description.to_string())),
+                ai_generations::generated_at.eq(now),
+            ))
+            .execute(conn)
+    } else {
+        let record = NewAiGeneration {
+            video_id,
+            transcript: None,
+            thumbnail_text: None,
+            instagram_description: None,
+            tiktok_description: None,
+            youtube_short_title: None,
+            youtube_short_description: None,
+            youtube_short_tags: None,
+            hashtags: None,
+            provider: None,
+            model: None,
+            generated_at: now,
+            visual_description: Some(description.to_string()),
+        };
+        diesel::insert_into(ai_generations::table).values(&record).execute(conn)
+    };
+
+    result.map(|_| ()).map_err(|e| format!("Failed to save visual description: {}", e))
 }
 
 #[cfg(test)]
