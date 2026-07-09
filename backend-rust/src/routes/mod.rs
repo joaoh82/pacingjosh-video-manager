@@ -6,3 +6,4 @@ pub mod stream;
 pub mod productions;
 pub mod ai;
 pub mod edit;
+pub mod search;

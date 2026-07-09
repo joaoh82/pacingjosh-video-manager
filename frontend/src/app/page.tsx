@@ -10,7 +10,12 @@ import BulkActions from '@/components/BulkActions';
 import Scanner from '@/components/Scanner';
 import ProductionManager from '@/components/ProductionManager';
 import { FilterState, Video, Production } from '@/lib/types';
-import { getConfig, getVideos, getCategories, getTags, getProductions, getStatistics, rescanDirectory } from '@/lib/api';
+import { getConfig, getVideos, getCategories, getTags, getProductions, getStatistics, rescanDirectory, semanticSearchVideos } from '@/lib/api';
+
+type SearchMode = 'keyword' | 'semantic';
+
+/** How many ranked results a semantic query returns. */
+const SEMANTIC_LIMIT = 48;
 
 export default function HomePage() {
   const router = useRouter();
@@ -26,6 +31,14 @@ export default function HomePage() {
   const [selectedVideoIds, setSelectedVideoIds] = useState<Set<number>>(new Set());
   const [rescanScanId, setRescanScanId] = useState<string | null>(null);
   const [showProductionManager, setShowProductionManager] = useState(false);
+
+  // Semantic search (natural-language ranking) — separate from the instant
+  // keyword filter so we only hit the embedding API on explicit submit.
+  const [searchMode, setSearchMode] = useState<SearchMode>('keyword');
+  const [semanticHasRun, setSemanticHasRun] = useState(false);
+  const [semanticIndexEmpty, setSemanticIndexEmpty] = useState(false);
+  const [semanticWeak, setSemanticWeak] = useState(false);
+  const [semanticError, setSemanticError] = useState<string | null>(null);
 
   const [filters, setFilters] = useState<FilterState>({
     search: '',
@@ -48,12 +61,13 @@ export default function HomePage() {
     checkConfig();
   }, []);
 
-  // Load data when filters or pagination change
+  // Load data when filters or pagination change. Semantic mode is driven by
+  // explicit submit (Enter), so we skip the auto-load there.
   useEffect(() => {
-    if (isConfigured) {
+    if (isConfigured && searchMode === 'keyword') {
       loadData();
     }
-  }, [filters, pagination, isConfigured]);
+  }, [filters, pagination, isConfigured, searchMode]);
 
   // Load categories and tags on mount
   useEffect(() => {
@@ -109,6 +123,57 @@ export default function HomePage() {
   const handleFilterChange = (newFilters: Partial<FilterState>) => {
     setFilters({ ...filters, ...newFilters });
     setPagination({ ...pagination, page: 1 }); // Reset to first page
+  };
+
+  // Search box text changed. In keyword mode this drives the instant filter; in
+  // semantic mode it only updates the query text (the search runs on Enter).
+  const handleSearchChange = (search: string) => {
+    if (searchMode === 'semantic') {
+      setFilters({ ...filters, search });
+    } else {
+      handleFilterChange({ search });
+    }
+  };
+
+  // Run a semantic (meaning-based) search for the current query.
+  const runSemanticSearch = async (query: string) => {
+    const q = query.trim();
+    if (!q) return;
+    setIsLoading(true);
+    setSemanticError(null);
+    try {
+      const res = await semanticSearchVideos(q, SEMANTIC_LIMIT);
+      setVideos(res.videos);
+      setTotalVideos(res.total);
+      setTotalPages(1);
+      setSemanticIndexEmpty(res.index_empty);
+      setSemanticWeak(res.weak_match && !res.index_empty && res.videos.length > 0);
+      setSemanticHasRun(true);
+    } catch (err: any) {
+      setSemanticError(err.message || 'Semantic search failed');
+      setVideos([]);
+      setTotalVideos(0);
+      setSemanticHasRun(true);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Flip between the instant keyword filter and semantic (AI) ranking.
+  const handleToggleSemantic = () => {
+    const next: SearchMode = searchMode === 'semantic' ? 'keyword' : 'semantic';
+    setSearchMode(next);
+    setSemanticError(null);
+    setSemanticIndexEmpty(false);
+    setSemanticWeak(false);
+    setSemanticHasRun(false);
+    if (next === 'semantic') {
+      // Clear the keyword grid; results appear once the user submits a query.
+      setVideos([]);
+      setTotalVideos(0);
+      setTotalPages(1);
+    }
+    // Switching back to keyword lets the load effect refresh the grid.
   };
 
   const handleClearFilters = () => {
@@ -214,10 +279,36 @@ export default function HomePage() {
               <Scanner scanId={rescanScanId} onComplete={handleRescanComplete} />
             </div>
           )}
-          <SearchBar
-            value={filters.search}
-            onChange={(search) => handleFilterChange({ search })}
-          />
+          <div className="flex items-center gap-3">
+            <div className="flex-1">
+              <SearchBar
+                value={filters.search}
+                onChange={handleSearchChange}
+                onSubmit={searchMode === 'semantic' ? runSemanticSearch : undefined}
+                placeholder={
+                  searchMode === 'semantic'
+                    ? "Describe the video — e.g. 'me running in the snow'"
+                    : 'Search videos...'
+                }
+              />
+            </div>
+            <button
+              onClick={handleToggleSemantic}
+              className={`btn text-sm whitespace-nowrap ${
+                searchMode === 'semantic' ? 'btn-primary' : 'btn-secondary'
+              }`}
+              title="Semantic (AI) search — rank videos by meaning, not just keywords"
+            >
+              ✨ Semantic{searchMode === 'semantic' ? ' ✓' : ''}
+            </button>
+          </div>
+          {searchMode === 'semantic' && (
+            <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+              Ranks the whole library by meaning — type a description and press{' '}
+              <kbd className="px-1 bg-gray-100 dark:bg-gray-700 rounded">Enter</kbd>. Sidebar
+              filters don&apos;t apply to semantic results.
+            </p>
+          )}
         </div>
       </header>
 
@@ -245,16 +336,59 @@ export default function HomePage() {
 
           {/* Main - Video Grid */}
           <main className="lg:col-span-3">
-            <VideoGrid
-              videos={videos}
-              isLoading={isLoading}
-              selectedVideos={selectedVideoIds}
-              onVideoSelect={handleVideoSelect}
-              onVideoClick={setSelectedVideo}
-            />
+            {/* Semantic search banners */}
+            {searchMode === 'semantic' && semanticError && (
+              <div className="mb-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+                <p className="text-sm text-red-600 dark:text-red-400">{semanticError}</p>
+              </div>
+            )}
+            {searchMode === 'semantic' && semanticHasRun && semanticIndexEmpty && !semanticError && (
+              <div className="mb-4 p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
+                <p className="text-sm text-yellow-800 dark:text-yellow-300">
+                  The semantic index is empty. Build it first in{' '}
+                  <button
+                    onClick={() => router.push('/settings')}
+                    className="underline font-medium"
+                  >
+                    Settings → AI / LLM → Rebuild index
+                  </button>
+                  , then try your search again.
+                </p>
+              </div>
+            )}
+            {searchMode === 'semantic' && semanticHasRun && semanticWeak && !semanticError && (
+              <div className="mb-4 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+                <p className="text-sm text-blue-800 dark:text-blue-300">
+                  No strong matches — showing the closest clips. Semantic search is text-only, so
+                  it can&apos;t find purely visual content that nothing describes. Try describing
+                  <em> spoken</em> content, or add tags/notes/transcripts to make more videos findable.
+                </p>
+              </div>
+            )}
 
-            {/* Pagination */}
-            {totalPages > 1 && (
+            {searchMode === 'semantic' && !semanticHasRun && !isLoading ? (
+              <div className="card text-center py-16">
+                <p className="text-4xl mb-3">✨</p>
+                <p className="text-gray-700 dark:text-gray-300 font-medium mb-1">
+                  Semantic search
+                </p>
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  Describe what you&apos;re looking for — like{' '}
+                  <em>&ldquo;me talking about parenting&rdquo;</em> — and press Enter.
+                </p>
+              </div>
+            ) : (
+              <VideoGrid
+                videos={videos}
+                isLoading={isLoading}
+                selectedVideos={selectedVideoIds}
+                onVideoSelect={handleVideoSelect}
+                onVideoClick={setSelectedVideo}
+              />
+            )}
+
+            {/* Pagination (keyword mode only — semantic returns a ranked top-N) */}
+            {searchMode === 'keyword' && totalPages > 1 && (
               <div className="flex items-center justify-center gap-2 mt-8">
                 <button
                   onClick={() => handlePageChange(pagination.page - 1)}

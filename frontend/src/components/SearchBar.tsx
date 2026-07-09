@@ -7,6 +7,9 @@ interface SearchBarProps {
   onChange: (value: string) => void;
   placeholder?: string;
   debounceMs?: number;
+  /** Called when the user presses Enter — used by semantic search to run the
+   *  query on submit rather than on every keystroke. */
+  onSubmit?: (value: string) => void;
 }
 
 export default function SearchBar({
@@ -14,6 +17,7 @@ export default function SearchBar({
   onChange,
   placeholder = 'Search videos...',
   debounceMs = 300,
+  onSubmit,
 }: SearchBarProps) {
   const [localValue, setLocalValue] = useState(value);
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -34,6 +38,17 @@ export default function SearchBar({
     timeoutRef.current = setTimeout(() => {
       onChange(newValue);
     }, debounceMs);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      // Flush any pending debounced change so parent state matches, then submit.
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+      onChange(localValue);
+      onSubmit?.(localValue);
+    }
   };
 
   const handleClear = () => {
@@ -66,6 +81,7 @@ export default function SearchBar({
           type="text"
           value={localValue}
           onChange={(e) => handleChange(e.target.value)}
+          onKeyDown={handleKeyDown}
           className="input pl-10 pr-10"
           placeholder={placeholder}
         />

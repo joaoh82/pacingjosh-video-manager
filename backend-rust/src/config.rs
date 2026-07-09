@@ -51,6 +51,15 @@ pub struct AiSettings {
     /// "gpt-image-1", "gpt-image-2").
     #[serde(default = "default_image_model")]
     pub image_model: String,
+    /// Provider used to embed text for semantic search: "openai" | "gemini".
+    /// Reuses the matching API key. Defaults via serde so configs written before
+    /// this field existed still load.
+    #[serde(default = "default_embedding_provider")]
+    pub embedding_provider: String,
+    /// Model id for semantic-search embeddings (e.g. "text-embedding-3-small",
+    /// "text-embedding-004"). Defaults via serde so older configs still load.
+    #[serde(default = "default_embedding_model")]
+    pub embedding_model: String,
 }
 
 /// Default image provider for thumbnail restyling.
@@ -61,6 +70,17 @@ pub fn default_image_provider() -> String {
 /// Default image model for thumbnail restyling.
 pub fn default_image_model() -> String {
     "gemini-2.5-flash-image".to_string()
+}
+
+/// Default embedding provider for semantic search.
+pub fn default_embedding_provider() -> String {
+    "openai".to_string()
+}
+
+/// Default embedding model for semantic search (OpenAI's small model — cheap,
+/// high quality, 1536-dim).
+pub fn default_embedding_model() -> String {
+    "text-embedding-3-small".to_string()
 }
 
 /// The default copy-generation prompt. Exposed so the API can offer a
@@ -175,6 +195,8 @@ impl Default for AiSettings {
             short_edit_prompt: default_short_edit_prompt(),
             image_provider: default_image_provider(),
             image_model: default_image_model(),
+            embedding_provider: default_embedding_provider(),
+            embedding_model: default_embedding_model(),
         }
     }
 }

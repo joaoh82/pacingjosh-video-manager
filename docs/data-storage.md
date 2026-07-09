@@ -44,8 +44,11 @@ com.pacingjosh.video-manager/
   > in a bug report.
 - **`database.db`** — a SQLite database holding the **index** of your library: each
   video's file path + extracted metadata (duration, resolution, fps, codec), your
-  tags, productions, AI generations, and the edit-pipeline history (edit decision
-  lists, logs, generated copy). It stores *references and metadata*, **not** the
+  tags, productions, AI generations, the edit-pipeline history (edit decision
+  lists, logs, generated copy), the AI‑derived **transcripts and visual
+  descriptions** used for search, and the **semantic-search embeddings** (one
+  cached vector per video/production, so natural-language search runs locally
+  without a per-query API call). It stores *references and metadata*, **not** the
   video bytes.
 - **`thumbnails/`** — the auto-generated preview frames, organized by each video's
   content checksum.

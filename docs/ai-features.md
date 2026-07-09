@@ -15,7 +15,7 @@ keys and data are stored, see [**Data storage**](data-storage.md).
 
 ## 1. Providers, models & keys
 
-Everything is configured under **Settings → AI / LLM**. There are three
+Everything is configured under **Settings → AI / LLM**. There are four
 independent provider slots, each with a model field, plus the API keys.
 
 | Slot | What it powers | Providers | Example models |
@@ -23,6 +23,7 @@ independent provider slots, each with a model field, plus the API keys.
 | **Transcription** | Speech‑to‑text for the edit pipeline and per‑video copy | ElevenLabs, OpenAI, Google Gemini | `scribe_v1`, `whisper-1`, `gemini-2.0-flash` |
 | **Text / LLM** | Planning the cut, AI timeline edits, social & YouTube copy, ✨ AI thumbnail text styling | Google Gemini, OpenAI, Anthropic | `gemini-2.0-flash`, `gpt-4o`, `claude-sonnet-4-6` |
 | **Image** | ✨ AI thumbnail frame restyle | Google Gemini, OpenAI (GPT Image) | `gemini-2.5-flash-image`, `gpt-image-2` |
+| **Embedding** | ✨ Semantic search (ranking videos & productions by meaning) | OpenAI, Google Gemini | `text-embedding-3-small`, `text-embedding-004` |
 
 ### API keys
 
@@ -178,7 +179,80 @@ generation, no extra cost beyond a small completion.
 
 ---
 
-## 7. What is *not* AI
+## 7. Semantic search (natural‑language search)
+
+The videos page has a **✨ Semantic** toggle next to the search bar (and the
+Production Manager has one on its search box). With it on, you can search by
+**meaning** instead of exact keywords:
+
+- *"me running in the snow"* → matches videos whose location/notes/tags or
+  transcript describe a snowy run, even if none of those exact words appear.
+- *"video where I talk about parenting"* → matches by what was **said** (the
+  transcript), not the filename.
+
+### How it works
+
+1. Each video is reduced to a text **document** — filename, category, location,
+   notes, tags, its productions, and its transcript (from the AI content panel or,
+   for takes, the edit pipeline). Each production's document is its title,
+   platform, latest script, generated copy, and its takes' transcripts.
+2. Those documents are **embedded** into vectors by your chosen embedding provider
+   and cached in the database. Your query is embedded the same way, and results
+   are ranked by **cosine similarity** — all locally, no per‑search LLM call.
+
+### Building the index
+
+Before the first search, build the index under **Settings → AI / LLM →
+Semantic search index → Rebuild index**. It shows how many videos/productions are
+indexed for the current model. Rebuilds are **incremental**: only documents whose
+text changed (or that were embedded with a different model) are re‑embedded, so
+running it again after a scan or after generating transcripts is cheap. Switching
+the embedding provider/model requires a rebuild (vectors from different models
+aren't comparable).
+
+**Transcribe missing (optional).** Because ranking rides on the transcript, a
+library of un‑transcribed talking‑head clips won't discriminate well. Tick
+**"Transcribe videos with no transcript first"** before Rebuild to run a
+transcription pre‑pass over every clip that has no transcript yet (using your
+configured transcription provider). It's much slower and costs transcription‑API
+money per clip, but it's what makes "the one where I talk about X" findable.
+Silent / action clips (no speech) are skipped automatically, and
+already‑transcribed videos are never redone, so re‑running it is cheap.
+
+**Describe visuals (optional).** To make **visual** content searchable — "running
+in the snow", "on the beach", "indoor gym" — tick **"Describe visuals for videos
+with no description first"**. Before indexing, it sends a few of each clip's
+**thumbnails** to your text/LLM provider (Gemini/OpenAI/Anthropic — all
+multimodal) and asks it to caption the scene, subjects, and activity plus a set
+of visual tags; that caption is stored and folded into the searchable document.
+This is what lets a query with **no matching transcript** still find the right
+footage. It's slower and costs LLM‑API money per clip, reuses the thumbnails you
+already generated (no re‑encoding), and already‑described videos are never redone.
+You can tick both pre‑passes at once.
+
+### Notes & limits
+
+- **Only videos with describable text are indexed** — a transcript, tags, notes, a
+  category, a *descriptive* filename, or a visual description. Raw clips whose only
+  text is a camera filename (e.g. `GX011916.MP4`, `IMG_1234.MOV`) are **skipped on
+  purpose**: those names are meaningless and would otherwise embed into one dense
+  cluster that dominates every query (making every search return the same clips).
+  So the *indexed* count is usually lower than the total until you add tags/notes,
+  transcribe, or **describe visuals**.
+- **Visuals need the "Describe visuals" pass.** Out of the box, matching is over
+  **text only**, so a purely visual query ("running in the snow") only lands if
+  some text describes it. Run **Describe visuals** (above) to caption your footage
+  and close that gap; otherwise the "what did I talk about" (transcript) case works
+  far better than "what do I see".
+- **Filters don't apply** to semantic results — it ranks the indexed videos by the
+  query and returns the top matches (no pagination).
+- Needs an **OpenAI or Gemini** key for embeddings; **Describe visuals** also needs
+  a key for your text/LLM provider, and **Transcribe missing** one for your
+  transcription provider.
+
+---
+
+## 8. What is *not* AI
 
 A couple of features look AI‑ish but run entirely through **bundled FFmpeg
 filters** — no keys, no network, no cost:
@@ -193,7 +267,7 @@ filters** — no keys, no network, no cost:
 
 ---
 
-## 8. Cost & privacy
+## 9. Cost & privacy
 
 - **Local‑first.** Your video index, thumbnails, and settings (including keys)
   stay on your machine. Source videos and rendered outputs never leave it.
@@ -208,7 +282,7 @@ filters** — no keys, no network, no cost:
 
 ---
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 | Symptom | Likely cause / fix |
 | --- | --- |

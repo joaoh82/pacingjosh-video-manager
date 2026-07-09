@@ -73,6 +73,7 @@ diesel::table! {
         provider -> Nullable<Text>,
         model -> Nullable<Text>,
         generated_at -> Timestamp,
+        visual_description -> Nullable<Text>,
     }
 }
 
@@ -99,6 +100,28 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    video_embeddings (video_id) {
+        video_id -> Integer,
+        content_hash -> Text,
+        model -> Text,
+        dim -> Integer,
+        embedding -> Binary,
+        updated_at -> Timestamp,
+    }
+}
+
+diesel::table! {
+    production_embeddings (production_id) {
+        production_id -> Integer,
+        content_hash -> Text,
+        model -> Text,
+        dim -> Integer,
+        embedding -> Binary,
+        updated_at -> Timestamp,
+    }
+}
+
 diesel::joinable!(metadata -> videos (video_id));
 diesel::joinable!(video_tags -> videos (video_id));
 diesel::joinable!(video_tags -> tags (tag_id));
@@ -106,6 +129,8 @@ diesel::joinable!(video_productions -> videos (video_id));
 diesel::joinable!(video_productions -> productions (production_id));
 diesel::joinable!(ai_generations -> videos (video_id));
 diesel::joinable!(production_edits -> productions (production_id));
+diesel::joinable!(video_embeddings -> videos (video_id));
+diesel::joinable!(production_embeddings -> productions (production_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     videos,
@@ -116,4 +141,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     video_productions,
     ai_generations,
     production_edits,
+    video_embeddings,
+    production_embeddings,
 );
