@@ -346,6 +346,33 @@ pub fn voice_enhance_filter(intensity: f32) -> String {
     )
 }
 
+/// Render `fps` for ffmpeg's `fps=` filter. The scanner stores frame rates as
+/// `f32`, so NTSC rates arrive slightly off (60000/1001 becomes 59.94006…);
+/// left raw, ffmpeg parses that decimal as the rational 2997003/50000, giving
+/// every segment a video timescale of 2,997,003 ticks/s. mp4 sample durations
+/// are 32-bit, so at that resolution the muxer-generated timecode track (one
+/// sample spanning the whole video) overflows after ~716s and ffmpeg aborts
+/// (`get_cluster_duration` assert in movenc.c). Snap near-NTSC rates to their
+/// exact rationals and near-integers to integers; pure for testability.
+pub fn fps_filter_value(fps: f32) -> String {
+    const NTSC: [(f32, &str); 4] = [
+        (23.976_025, "24000/1001"),
+        (29.97003, "30000/1001"),
+        (59.94006, "60000/1001"),
+        (119.88012, "120000/1001"),
+    ];
+    for (rate, rational) in NTSC {
+        if (fps - rate).abs() < 0.02 {
+            return rational.to_string();
+        }
+    }
+    let rounded = fps.round();
+    if (fps - rounded).abs() < 0.01 {
+        return format!("{}", rounded as i64);
+    }
+    format!("{}", fps)
+}
+
 /// Extract a single clip `[start, end)` (seconds) from `input` and normalize it
 /// to a fixed `width`x`height`/`fps`, H.264 + AAC, yuv420p. Normalizing every
 /// segment to the same spec lets the final concat use stream copy.
@@ -390,7 +417,7 @@ pub fn extract_clip_segment(
 pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps={fps}",
         w = w,
         h = h,
-        fps = fps
+        fps = fps_filter_value(fps)
     );
     // Burn in captions last so they're sized relative to the final frame.
     // Portrait (shorts) frames get the platform-native look: bold text placed
@@ -430,6 +457,11 @@ pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps={fps}",
             "-c:a", "aac",
             "-ar", "48000",
             "-ac", "2",
+            // Standard 90 kHz video timescale: keeps mp4 sample durations far
+            // from the 32-bit limit (overflow at ~6.6h instead of minutes when
+            // an odd source rate slips through) and survives the stream-copy
+            // concat/music stages untouched.
+            "-video_track_timescale", "90000",
             "-movflags", "+faststart",
             "-y",
         ])
@@ -560,6 +592,7 @@ pub fn add_background_music(
             "-c:a", "aac",
             "-ar", "48000",
             "-ac", "2",
+            "-video_track_timescale", "90000",
             "-movflags", "+faststart",
             "-y",
         ])
@@ -603,7 +636,14 @@ pub fn concat_clips(segments: &[PathBuf], out_path: &Path) -> Result<(), String>
     let output = ffmpeg_cmd()
         .args(["-f", "concat", "-safe", "0", "-i"])
         .arg(&list_path)
-        .args(["-c", "copy", "-movflags", "+faststart", "-y"])
+        .args([
+            "-c", "copy",
+            // Re-time the copied video track onto a sane timescale even when
+            // the segments carry an oddball one (e.g. pre-fix work dirs).
+            "-video_track_timescale", "90000",
+            "-movflags", "+faststart",
+            "-y",
+        ])
         .arg(out_path)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
@@ -809,6 +849,7 @@ pub fn composite_overlays(
             "-crf", "20",
             "-pix_fmt", "yuv420p",
             "-c:a", "copy",
+            "-video_track_timescale", "90000",
             "-movflags", "+faststart",
             "-y",
         ])
@@ -920,6 +961,29 @@ mod tests {
         o.chroma_color = "".to_string();
         let f = build_overlay_filter(&[o]);
         assert!(!f.contains("colorkey"));
+    }
+
+    #[test]
+    fn fps_filter_snaps_ntsc_rates_to_exact_rationals() {
+        // f32 renderings of the NTSC rates, as stored by the scanner.
+        assert_eq!(fps_filter_value(59.94006), "60000/1001");
+        assert_eq!(fps_filter_value(29.97003), "30000/1001");
+        assert_eq!(fps_filter_value(23.976025), "24000/1001");
+        assert_eq!(fps_filter_value(119.88012), "120000/1001");
+    }
+
+    #[test]
+    fn fps_filter_keeps_integer_rates_integral() {
+        assert_eq!(fps_filter_value(30.0), "30");
+        assert_eq!(fps_filter_value(60.0), "60");
+        assert_eq!(fps_filter_value(25.0), "25");
+        // 59.999 is "basically 60", not an NTSC rate.
+        assert_eq!(fps_filter_value(59.999), "60");
+    }
+
+    #[test]
+    fn fps_filter_passes_unusual_rates_through() {
+        assert_eq!(fps_filter_value(48.5), "48.5");
     }
 
     #[test]
