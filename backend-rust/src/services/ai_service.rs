@@ -745,17 +745,17 @@ async fn generate_anthropic(prompt: &str, ai: &AiSettings, max_tokens: u32) -> R
         .filter(|k| !k.is_empty())
         .ok_or("Anthropic API key is not configured")?;
 
-    // Anthropic has no `response_format: json_object`, so prefill the assistant
-    // turn with `{`. The model then continues *inside* the object instead of
-    // wrapping it in prose or a ```json fence — the one JSON-mode guarantee the
-    // OpenAI and Gemini paths get for free.
+    // Anthropic has no `response_format: json_object`, and prefilling the
+    // assistant turn with `{` to force one is NOT portable — newer models reject
+    // it outright ("This model does not support assistant message prefill"), and
+    // there's no capability flag to test for, only the model name the user typed
+    // in Settings. So the conversation ends with the user turn and the response
+    // is normalized by `model_json` instead, which already tolerates ```json
+    // fences and surrounding prose.
     let body = serde_json::json!({
         "model": ai.text_model,
         "max_tokens": max_tokens,
-        "messages": [
-            { "role": "user", "content": prompt },
-            { "role": "assistant", "content": "{" }
-        ]
+        "messages": [{ "role": "user", "content": prompt }]
     });
 
     let resp = client()
@@ -777,18 +777,8 @@ async fn generate_anthropic(prompt: &str, ai: &AiSettings, max_tokens: u32) -> R
         serde_json::from_str(&text).map_err(|e| format!("Bad Anthropic response: {}", e))?;
     parsed["content"][0]["text"]
         .as_str()
-        .map(restore_prefill)
+        .map(|s| s.to_string())
         .ok_or_else(|| "Anthropic returned no content".to_string())
-}
-
-/// Put back the `{` that was prefilled into the assistant turn — the API echoes
-/// only the continuation. Left alone if the model opened its own object anyway.
-fn restore_prefill(body: &str) -> String {
-    let trimmed = body.trim_start();
-    if trimmed.starts_with('{') || trimmed.starts_with("```") {
-        return body.to_string();
-    }
-    format!("{{{}", body)
 }
 
 // --- Embeddings --------------------------------------------------------------
