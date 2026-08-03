@@ -3,6 +3,7 @@ pub mod video_service;
 pub mod search_service;
 pub mod production_service;
 pub mod scanner;
+pub mod model_json;
 pub mod ai_service;
 pub mod edit_service;
 pub mod overlay_service;
