@@ -15,6 +15,7 @@ use std::path::Path;
 use crate::config::AiSettings;
 use crate::models::{AiGeneration, NewAiGeneration};
 use crate::schema::ai_generations;
+use crate::services::model_json;
 
 const GEMINI_BASE: &str = "https://generativelanguage.googleapis.com/v1beta/models";
 const OPENAI_BASE: &str = "https://api.openai.com/v1";
@@ -267,9 +268,8 @@ pub async fn generate_content(
     let prompt = build_prompt(&ai.system_prompt, transcript);
     let raw = complete(&prompt, ai, 1024).await?;
 
-    let json = extract_json(&raw);
-    let mut content: GeneratedContent =
-        serde_json::from_str(json).map_err(|e| format!("Failed to parse model JSON: {} — raw: {}", e, raw))?;
+    let mut content: GeneratedContent = model_json::parse(&raw)
+        .map_err(|e| format!("Failed to parse model JSON: {} — raw: {}", e, raw))?;
 
     // Enforce the array-size contracts regardless of model behavior.
     content.hashtags.truncate(5);
@@ -319,8 +319,7 @@ TRANSCRIPT:\n\"\"\"\n{}\n\"\"\"",
     );
 
     let raw = complete(&prompt, ai, 2048).await?;
-    let json = extract_json(&raw);
-    let mut copy: YoutubeCopy = serde_json::from_str(json)
+    let mut copy: YoutubeCopy = model_json::parse(&raw)
         .map_err(|e| format!("Failed to parse copy JSON: {} — raw: {}", e, raw))?;
 
     copy.titles.truncate(3);
@@ -356,8 +355,7 @@ TRANSCRIPT:\n\"\"\"\n{}\n\"\"\"",
     );
 
     let raw = complete(&prompt, ai, 2048).await?;
-    let json = extract_json(&raw);
-    let mut copy: YoutubeCopy = serde_json::from_str(json)
+    let mut copy: YoutubeCopy = model_json::parse(&raw)
         .map_err(|e| format!("Failed to parse copy JSON: {} — raw: {}", e, raw))?;
 
     copy.titles.truncate(3);
@@ -585,20 +583,9 @@ EXTRA DIRECTION: "{extra}""##,
 /// canvas renderer expects, clamping numbers and validating hex colors so a
 /// loose model response can never produce an unrenderable style.
 fn parse_text_style(raw: &str) -> Result<serde_json::Value, String> {
-    let json = extract_json_object(raw)
-        .ok_or("The model did not return a JSON text style.".to_string())?;
+    let json = model_json::parse_value(raw)
+        .map_err(|_| "The model did not return a JSON text style.".to_string())?;
     Ok(build_style(&json))
-}
-
-/// Extract the first balanced top-level `{...}` object from a model response
-/// (tolerates ```json fences and surrounding prose).
-fn extract_json_object(raw: &str) -> Option<serde_json::Value> {
-    let start = raw.find('{')?;
-    let end = raw.rfind('}')?;
-    if end <= start {
-        return None;
-    }
-    serde_json::from_str(&raw[start..=end]).ok()
 }
 
 fn pick<'a>(v: &'a serde_json::Value, keys: &[&str]) -> Option<&'a serde_json::Value> {
@@ -758,10 +745,17 @@ async fn generate_anthropic(prompt: &str, ai: &AiSettings, max_tokens: u32) -> R
         .filter(|k| !k.is_empty())
         .ok_or("Anthropic API key is not configured")?;
 
+    // Anthropic has no `response_format: json_object`, so prefill the assistant
+    // turn with `{`. The model then continues *inside* the object instead of
+    // wrapping it in prose or a ```json fence — the one JSON-mode guarantee the
+    // OpenAI and Gemini paths get for free.
     let body = serde_json::json!({
         "model": ai.text_model,
         "max_tokens": max_tokens,
-        "messages": [{ "role": "user", "content": prompt }]
+        "messages": [
+            { "role": "user", "content": prompt },
+            { "role": "assistant", "content": "{" }
+        ]
     });
 
     let resp = client()
@@ -783,8 +777,18 @@ async fn generate_anthropic(prompt: &str, ai: &AiSettings, max_tokens: u32) -> R
         serde_json::from_str(&text).map_err(|e| format!("Bad Anthropic response: {}", e))?;
     parsed["content"][0]["text"]
         .as_str()
-        .map(|s| s.to_string())
+        .map(restore_prefill)
         .ok_or_else(|| "Anthropic returned no content".to_string())
+}
+
+/// Put back the `{` that was prefilled into the assistant turn — the API echoes
+/// only the continuation. Left alone if the model opened its own object anyway.
+fn restore_prefill(body: &str) -> String {
+    let trimmed = body.trim_start();
+    if trimmed.starts_with('{') || trimmed.starts_with("```") {
+        return body.to_string();
+    }
+    format!("{{{}", body)
 }
 
 // --- Embeddings --------------------------------------------------------------
@@ -952,8 +956,7 @@ pub async fn describe_video_frames(frames: &[Vec<u8>], ai: &AiSettings) -> Resul
 /// Flatten the model's `{summary, tags}` JSON into a single embeddable line.
 /// Falls back to the raw text when the response isn't the expected JSON.
 fn format_visual(raw: &str) -> String {
-    let json = extract_json(raw);
-    if let Ok(v) = serde_json::from_str::<serde_json::Value>(json) {
+    if let Ok(v) = model_json::parse_value(raw) {
         let summary = v["summary"].as_str().unwrap_or("").trim().to_string();
         let tags: Vec<String> = v["tags"]
             .as_array()
@@ -1115,18 +1118,6 @@ fn gemini_extract_text(body: &str) -> Result<String, String> {
         }
         None => Err(format!("Gemini response missing content: {}", body)),
     }
-}
-
-/// Best-effort extraction of a JSON object from a model response that may be
-/// wrapped in markdown fences or prose.
-fn extract_json(text: &str) -> &str {
-    let trimmed = text.trim();
-    if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}')) {
-        if end >= start {
-            return &trimmed[start..=end];
-        }
-    }
-    trimmed
 }
 
 // --- Persistence -------------------------------------------------------------

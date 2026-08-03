@@ -23,6 +23,7 @@ use crate::db::DbPool;
 use crate::models::NewProductionEdit;
 use crate::schema::production_edits;
 use crate::services::ai_service::{self, TranscriptWord};
+use crate::services::model_json;
 use crate::services::{ffmpeg_service, production_service, video_service};
 
 pub type EditJobMap = Arc<Mutex<HashMap<String, EditJobProgress>>>;
@@ -928,7 +929,26 @@ fn run_edit_inner(
         .block_on(ai_service::complete(&prompt, ai, 8192))
         .map_err(|e| format!("Edit planning failed: {}", e))?;
 
-    let resolved = resolve_plan(&raw, takes)?;
+    // Every take has already been transcribed by this point, so a plan that
+    // can't be read is an expensive way to fail. Ask once more, showing the
+    // model exactly what was wrong with its JSON, before giving up.
+    let resolved = match resolve_plan(&raw, takes) {
+        Ok(r) => r,
+        Err(first_err) => {
+            warn!("Edit plan JSON was unreadable, retrying once: {}", first_err);
+            log_msg(edit_map, job_id, "The model's plan wasn't valid JSON — asking it to fix the response.");
+            let retry_prompt = format!(
+                "{}\n\nYour previous response could not be parsed: {}\n\nReturn the SAME plan again \
+as a single strict JSON object. No markdown fences, no commentary, no comments, and no trailing \
+commas before a closing brace or bracket.",
+                prompt, first_err
+            );
+            let retry = rt
+                .block_on(ai_service::complete(&retry_prompt, ai, 8192))
+                .map_err(|e| format!("Edit planning failed: {}", e))?;
+            resolve_plan(&retry, takes).map_err(|_| first_err)?
+        }
+    };
     if resolved.is_empty() {
         return Err("The model did not return any usable clips for this script.".to_string());
     }
@@ -1405,8 +1425,7 @@ fn segment_words(words: &[TranscriptWord]) -> Vec<(f32, f32, String)> {
 /// unknown video ids, clamp ranges to the take duration, drop empty/invalid
 /// ranges. Returns the ordered clip list for stitching.
 fn resolve_plan(raw: &str, takes: &[TakeMeta]) -> Result<Vec<ResolvedClipInternal>, String> {
-    let json_str = extract_json(raw);
-    let value: serde_json::Value = serde_json::from_str(json_str)
+    let value: serde_json::Value = model_json::parse_value(raw)
         .map_err(|e| format!("Could not parse the model's edit plan as JSON: {} — raw: {}", e, truncate(raw, 500)))?;
 
     let by_id: HashMap<i32, &TakeMeta> = takes.iter().map(|t| (t.video_id, t)).collect();
@@ -1791,18 +1810,6 @@ fn resolve_target_spec(resolved: &[ResolvedClipInternal], takes: &[TakeMeta]) ->
 fn parse_resolution(res: &str) -> Option<(i32, i32)> {
     let (w, h) = res.split_once('x')?;
     Some((w.trim().parse().ok()?, h.trim().parse().ok()?))
-}
-
-/// Best-effort extraction of a JSON object from a model response that may be
-/// wrapped in markdown fences or prose.
-fn extract_json(text: &str) -> &str {
-    let trimmed = text.trim();
-    if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}')) {
-        if end >= start {
-            return &trimmed[start..=end];
-        }
-    }
-    trimmed
 }
 
 fn read_f32(v: &serde_json::Value) -> Option<f32> {
@@ -2284,8 +2291,7 @@ fn parse_timeline_edit_plan(
     clips: &[serde_json::Value],
     total: f32,
 ) -> serde_json::Value {
-    let value: serde_json::Value =
-        serde_json::from_str(extract_json(raw)).unwrap_or(serde_json::Value::Null);
+    let value: serde_json::Value = model_json::parse_value(raw).unwrap_or(serde_json::Value::Null);
 
     // order -> (source_start, source_end) of the saved clip, for clamping.
     let mut ranges: HashMap<i64, (f32, f32)> = HashMap::new();
@@ -2487,6 +2493,51 @@ CREATOR INSTRUCTION:\n\"\"\"\n{instruction}\n\"\"\"",
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn take(video_id: i32, duration: f32) -> TakeMeta {
+        TakeMeta {
+            video_id,
+            filename: format!("GX{}.MP4", video_id),
+            file_path: format!("/takes/GX{}.MP4", video_id),
+            duration,
+            resolution: None,
+            fps: None,
+        }
+    }
+
+    /// A trailing comma in the model's plan used to fail the whole run after
+    /// every take had already been transcribed.
+    #[test]
+    fn resolve_plan_survives_a_trailing_comma() {
+        let raw = r#"{
+  "scenes": [
+    {
+      "scene_number": 1,
+      "clips": [
+        { "video_id": 232, "start": 0.34, "end": 15.30, "reason": "Clean intro read.", }
+      ],
+    },
+    {
+      "scene_number": 2,
+      "clips": [{ "video_id": 231, "start": 0.0, "end": 9.0 }],
+    },
+  ]
+}"#;
+        let takes = vec![take(232, 40.0), take(231, 30.0)];
+        let resolved = resolve_plan(raw, &takes).expect("trailing commas should be repaired");
+        assert_eq!(resolved.len(), 2);
+        assert_eq!(resolved[0].video_id, 232);
+        assert_eq!(resolved[0].reason.as_deref(), Some("Clean intro read."));
+        assert_eq!(resolved[1].end, 9.0);
+    }
+
+    /// A response cut off mid-plan must still fail — half an edit silently
+    /// rendered is worse than an error.
+    #[test]
+    fn resolve_plan_rejects_a_truncated_response() {
+        let raw = r#"{"scenes": [{"scene_number": 1, "clips": [{"video_id": 232, "start": 0.0, "end": 5.0}"#;
+        assert!(resolve_plan(raw, &[take(232, 40.0)]).is_err());
+    }
 
     #[test]
     fn apply_clip_edit_keeps_saved_range_without_edit() {
