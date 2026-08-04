@@ -8,6 +8,7 @@
 // silent miss can never ship a half-bumped release):
 //   - src-tauri/tauri.conf.json   ("version")
 //   - frontend/package.json       ("version")
+//   - frontend/package-lock.json  (top-level + the root "packages" entry)
 //   - src-tauri/Cargo.toml        ([package] version)
 //   - backend-rust/Cargo.toml     ([package] version)
 //   - src-tauri/Cargo.lock        (video-manager-tauri, video-manager-backend)
@@ -45,6 +46,24 @@ function jsonVersion(content, relPath) {
   const re = /("version"\s*:\s*")[^"]+(")/;
   if (!re.test(content)) throw new Error(`No "version" field found in ${relPath}`);
   return content.replace(re, `$1${version}$2`);
+}
+
+/**
+ * Replace both version fields npm keeps in a package-lock.json: the top-level
+ * one and the copy inside the root `"packages"` entry (`""`). Patched with
+ * targeted regexes rather than a JSON round-trip so the rest of the (very
+ * large) file — key order, indentation, line endings — stays byte-identical.
+ */
+function npmLockVersion(content, relPath) {
+  // Top-level "version" — the first one in the file.
+  const top = /("version"\s*:\s*")[^"]+(")/;
+  if (!top.test(content)) throw new Error(`No top-level "version" found in ${relPath}`);
+  let out = content.replace(top, `$1${version}$2`);
+
+  // The root package entry: "packages": { "": { "name": …, "version": … } }.
+  const rootPkg = /("packages"\s*:\s*\{\s*""\s*:\s*\{[\s\S]*?"version"\s*:\s*")[^"]+(")/;
+  if (!rootPkg.test(out)) throw new Error(`No root "packages" version found in ${relPath}`);
+  return out.replace(rootPkg, `$1${version}$2`);
 }
 
 /** Replace the `version = "..."` line inside the [package] section of a Cargo.toml. */
@@ -87,6 +106,7 @@ function cargoLockVersion(pkgNames) {
 console.log(`Bumping version → ${version}`);
 patch('src-tauri/tauri.conf.json', jsonVersion);
 patch('frontend/package.json', jsonVersion);
+patch('frontend/package-lock.json', npmLockVersion);
 patch('src-tauri/Cargo.toml', cargoTomlVersion);
 patch('backend-rust/Cargo.toml', cargoTomlVersion);
 patch('src-tauri/Cargo.lock', cargoLockVersion(['video-manager-tauri', 'video-manager-backend']));
