@@ -371,11 +371,18 @@ TRANSCRIPT:\n\"\"\"\n{}\n\"\"\"",
 /// Restyle a thumbnail frame with the configured image provider/model: send the
 /// still + a style prompt, get back an edited image (keeping the subject).
 /// Returns image bytes. (Text is added as a real overlay later, not by the model,
-/// so it stays accurate.)
-pub async fn restyle_image(image_jpeg: &[u8], prompt: &str, ai: &AiSettings) -> Result<Vec<u8>, String> {
+/// so it stays accurate.) `portrait` asks for a 9:16 result (short-form
+/// thumbnails) instead of the 16:9 default.
+pub async fn restyle_image(
+    image_jpeg: &[u8],
+    prompt: &str,
+    ai: &AiSettings,
+    portrait: bool,
+) -> Result<Vec<u8>, String> {
     match ai.image_provider.as_str() {
+        // Gemini follows the input image's aspect, so nothing extra to pass.
         "gemini" => restyle_gemini(image_jpeg, prompt, ai).await,
-        "openai" => restyle_openai(image_jpeg, prompt, ai).await,
+        "openai" => restyle_openai(image_jpeg, prompt, ai, portrait).await,
         other => Err(format!("Unsupported image provider: {}", other)),
     }
 }
@@ -466,7 +473,12 @@ off and use the real frame + text overlay.",
 }
 
 /// Restyle via OpenAI's image edit endpoint (e.g. gpt-image-1 / gpt-image-2).
-async fn restyle_openai(image_jpeg: &[u8], prompt: &str, ai: &AiSettings) -> Result<Vec<u8>, String> {
+async fn restyle_openai(
+    image_jpeg: &[u8],
+    prompt: &str,
+    ai: &AiSettings,
+    portrait: bool,
+) -> Result<Vec<u8>, String> {
     let key = ai
         .openai_api_key
         .as_deref()
@@ -480,7 +492,7 @@ async fn restyle_openai(image_jpeg: &[u8], prompt: &str, ai: &AiSettings) -> Res
     let form = reqwest::multipart::Form::new()
         .text("model", ai.image_model.clone())
         .text("prompt", prompt.to_string())
-        .text("size", "1536x1024")
+        .text("size", if portrait { "1024x1536" } else { "1536x1024" })
         .part("image[]", part);
 
     let resp = client()

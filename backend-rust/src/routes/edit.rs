@@ -514,9 +514,27 @@ async fn generate_copy(
 
 // --- Thumbnail builder -------------------------------------------------------
 
+/// Default thumbnail size — 16:9, matching a long-form (YouTube) thumbnail.
+/// Short-form runs ask for a 9:16 box instead (see `thumbnail_size`).
+const DEFAULT_THUMB_W: i32 = 1280;
+const DEFAULT_THUMB_H: i32 = 720;
+
 #[derive(Deserialize)]
 pub struct FrameQuery {
     pub t: Option<f32>,
+    /// Target frame width/height. The thumbnail builder sends its own canvas
+    /// size so the still it draws is already the right aspect (16:9 for
+    /// long-form, 9:16 for shorts). Omitted → the 16:9 default.
+    pub w: Option<i32>,
+    pub h: Option<i32>,
+}
+
+/// Clamp a requested thumbnail size to something ffmpeg will happily produce.
+fn thumbnail_size(w: Option<i32>, h: Option<i32>) -> (i32, i32) {
+    (
+        w.unwrap_or(DEFAULT_THUMB_W).clamp(64, 4096),
+        h.unwrap_or(DEFAULT_THUMB_H).clamp(64, 4096),
+    )
 }
 
 /// Resolve a run's final video path if it still exists on disk.
@@ -549,7 +567,8 @@ async fn edit_video(
     }
 }
 
-/// Grab a still frame (1280x720 JPEG) from a run's final video at `t` seconds.
+/// Grab a still frame (JPEG) from a run's final video at `t` seconds, cropped to
+/// the requested box (default 1280x720; shorts ask for 9:16).
 #[get("/edits/{edit_id}/frame")]
 async fn edit_frame(
     pool: web::Data<DbPool>,
@@ -562,7 +581,8 @@ async fn edit_frame(
         None => return HttpResponse::NotFound().json(serde_json::json!({ "detail": "Final video not found" })),
     };
     let t = query.t.unwrap_or(0.0);
-    match web::block(move || ffmpeg_service::extract_frame(Path::new(&out), t, 1280, 720)).await {
+    let (w, h) = thumbnail_size(query.w, query.h);
+    match web::block(move || ffmpeg_service::extract_frame(Path::new(&out), t, w, h)).await {
         Ok(Ok(bytes)) => HttpResponse::Ok().content_type("image/jpeg").body(bytes),
         Ok(Err(e)) => HttpResponse::InternalServerError().json(serde_json::json!({ "detail": e })),
         Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({ "detail": e.to_string() })),
@@ -573,6 +593,10 @@ async fn edit_frame(
 pub struct RestyleRequest {
     pub t: Option<f32>,
     pub prompt: Option<String>,
+    /// Target frame size, as for `GET /frame` — keeps the restyled still in the
+    /// same aspect as the builder's canvas (9:16 for shorts).
+    pub w: Option<i32>,
+    pub h: Option<i32>,
 }
 
 /// AI-restyle a still frame with Gemini's image model (keeps the subject, no
@@ -590,12 +614,14 @@ async fn restyle_frame(
         None => return HttpResponse::NotFound().json(serde_json::json!({ "detail": "Final video not found" })),
     };
     let t = body.t.unwrap_or(0.0);
-    let frame = match web::block(move || ffmpeg_service::extract_frame(Path::new(&out), t, 1280, 720)).await {
+    let (w, h) = thumbnail_size(body.w, body.h);
+    let frame = match web::block(move || ffmpeg_service::extract_frame(Path::new(&out), t, w, h)).await {
         Ok(Ok(b)) => b,
         Ok(Err(e)) => return HttpResponse::InternalServerError().json(serde_json::json!({ "detail": e })),
         Err(e) => return HttpResponse::InternalServerError().json(serde_json::json!({ "detail": e.to_string() })),
     };
-    let prompt = body
+    let portrait = h > w;
+    let mut prompt = body
         .prompt
         .as_deref()
         .map(str::trim)
@@ -606,9 +632,14 @@ person and scene clearly recognizable; boost contrast and saturation, cinematic 
 crisp and vibrant. Do NOT add any text or logos.",
         )
         .to_string();
+    // Nudge the image model to hand back the same shape it was given — a
+    // landscape result would be centre-cropped and lose the framing.
+    if portrait {
+        prompt.push_str(" Keep the vertical 9:16 portrait framing of the input image.");
+    }
 
     let ai = config.get_ai_settings();
-    match ai_service::restyle_image(&frame, &prompt, &ai).await {
+    match ai_service::restyle_image(&frame, &prompt, &ai, portrait).await {
         Ok(png) => HttpResponse::Ok().content_type("image/png").body(png),
         Err(e) => HttpResponse::InternalServerError().json(serde_json::json!({ "detail": e })),
     }
