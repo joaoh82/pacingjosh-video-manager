@@ -530,9 +530,23 @@ export function getOverlayPreviewUrl(path: string): string {
 
 // --- Thumbnail builder ---
 
-/** Grab a 1280x720 still frame from a run's final video at `t` seconds. */
-export async function fetchEditFrame(editId: number, t: number): Promise<Blob> {
-  const res = await fetch(apiUrl(`/api/edits/${editId}/frame?t=${t}`));
+/** Target size for a thumbnail still — the builder's own canvas size, so the
+ *  frame comes back already cropped to the right aspect (16:9 long-form,
+ *  9:16 shorts). Omitted → the backend's 1280x720 default. */
+export interface FrameSize {
+  width: number;
+  height: number;
+}
+
+/** Grab a still frame from a run's final video at `t` seconds, cropped to
+ *  `size` (default 1280x720). */
+export async function fetchEditFrame(
+  editId: number,
+  t: number,
+  size?: FrameSize
+): Promise<Blob> {
+  const dims = size ? `&w=${Math.round(size.width)}&h=${Math.round(size.height)}` : '';
+  const res = await fetch(apiUrl(`/api/edits/${editId}/frame?t=${t}${dims}`));
   if (!res.ok) throw new Error((await res.text()) || 'Failed to grab frame');
   return res.blob();
 }
@@ -541,12 +555,18 @@ export async function fetchEditFrame(editId: number, t: number): Promise<Blob> {
 export async function restyleEditFrame(
   editId: number,
   t: number,
-  prompt?: string
+  prompt?: string,
+  size?: FrameSize
 ): Promise<Blob> {
   const res = await fetch(apiUrl(`/api/edits/${editId}/restyle`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ t, prompt }),
+    body: JSON.stringify({
+      t,
+      prompt,
+      w: size ? Math.round(size.width) : undefined,
+      h: size ? Math.round(size.height) : undefined,
+    }),
   });
   if (!res.ok) {
     let msg = await res.text();

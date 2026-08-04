@@ -11,8 +11,15 @@ import {
 import type { ThumbnailSpec, ThumbnailTextStyle } from '@/lib/types';
 import { DEFAULT_TEXT_STYLE, drawStyledText } from '@/lib/styledText';
 
-const W = 1280;
-const H = 720;
+/** Canvas size per production shape: 16:9 for long-form (YouTube), 9:16 for
+ *  short-form (Shorts/Reels/TikTok). */
+const LANDSCAPE = { width: 1280, height: 720 };
+const PORTRAIT = { width: 1080, height: 1920 };
+
+/** Text metrics (font size, outline width) are authored against this canvas
+ *  width and scaled to the real canvas, so the sliders keep the same meaning and
+ *  a spec saved on one shape still looks right on the other. */
+const REF_WIDTH = LANDSCAPE.width;
 
 type Align = 'left' | 'center' | 'right';
 
@@ -20,6 +27,8 @@ interface ThumbnailEditorProps {
   editId: number;
   duration: number;
   suggestedTexts: string[];
+  /** Build a 9:16 thumbnail instead of 16:9 (short-form productions). */
+  portrait?: boolean;
   /** Previously-saved thumbnail state for this run (rehydrated on reopen). */
   saved?: ThumbnailSpec | null;
   /** Topic/title context, used to make AI text styling more relevant. */
@@ -33,18 +42,33 @@ function clamp(v: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, v));
 }
 
-/** Render the background still (cover-fit) onto an offscreen canvas and return a
- *  PNG data URL — persisted so an AI restyle / exact frame restores on reopen. */
-function renderBackground(img: HTMLImageElement): string | undefined {
-  const off = document.createElement('canvas');
-  off.width = W;
-  off.height = H;
-  const ctx = off.getContext('2d');
-  if (!ctx) return undefined;
-  const scale = Math.max(W / img.width, H / img.height);
+/** Cover-fit `img` into a `w`x`h` box on `ctx`, centered — the still may come
+ *  back at a different aspect than the canvas (e.g. an AI restyle). */
+function drawCover(
+  ctx: CanvasRenderingContext2D,
+  img: HTMLImageElement,
+  w: number,
+  h: number
+): void {
+  const scale = Math.max(w / img.width, h / img.height);
   const dw = img.width * scale;
   const dh = img.height * scale;
-  ctx.drawImage(img, (W - dw) / 2, (H - dh) / 2, dw, dh);
+  ctx.drawImage(img, (w - dw) / 2, (h - dh) / 2, dw, dh);
+}
+
+/** Render the background still (cover-fit) onto an offscreen canvas and return a
+ *  PNG data URL — persisted so an AI restyle / exact frame restores on reopen. */
+function renderBackground(
+  img: HTMLImageElement,
+  w: number,
+  h: number
+): string | undefined {
+  const off = document.createElement('canvas');
+  off.width = w;
+  off.height = h;
+  const ctx = off.getContext('2d');
+  if (!ctx) return undefined;
+  drawCover(ctx, img, w, h);
   return off.toDataURL('image/png');
 }
 
@@ -52,10 +76,14 @@ export default function ThumbnailEditor({
   editId,
   duration,
   suggestedTexts,
+  portrait = false,
   saved,
   context,
   onSaved,
 }: ThumbnailEditorProps) {
+  const { width: W, height: H } = portrait ? PORTRAIT : LANDSCAPE;
+  // Absolute text metrics are authored at REF_WIDTH; scale them to this canvas.
+  const metricScale = W / REF_WIDTH;
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const reqIdRef = useRef(0);
   const draggingRef = useRef(false);
@@ -79,7 +107,9 @@ export default function ThumbnailEditor({
 
   const [restyling, setRestyling] = useState(false);
   const [restylePrompt, setRestylePrompt] = useState(
-    'Enhance this into a punchy YouTube thumbnail: richer contrast and saturation, cinematic color grade, sharper detail, brighter highlights. Keep the subject and composition unchanged. No text.'
+    `Enhance this into a punchy ${
+      portrait ? 'vertical 9:16 Shorts' : 'YouTube'
+    } thumbnail: richer contrast and saturation, cinematic color grade, sharper detail, brighter highlights. Keep the subject and composition unchanged. No text.`
   );
 
   const [styling, setStyling] = useState(false);
@@ -133,10 +163,10 @@ export default function ThumbnailEditor({
         });
         if (res.ok) return res.blob();
         // No saved background on disk — re-grab the original frame.
-        return fetchEditFrame(editId, saved.frameTime);
+        return fetchEditFrame(editId, saved.frameTime, { width: W, height: H });
       });
     } else {
-      loadFrame(() => fetchEditFrame(editId, t));
+      loadFrame(() => fetchEditFrame(editId, t, { width: W, height: H }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -151,7 +181,7 @@ export default function ThumbnailEditor({
     setRestyled(false); // picking a new frame drops any AI restyle
     if (frameDebounceRef.current) clearTimeout(frameDebounceRef.current);
     frameDebounceRef.current = setTimeout(() => {
-      loadFrame(() => fetchEditFrame(editId, nextT));
+      loadFrame(() => fetchEditFrame(editId, nextT, { width: W, height: H }));
     }, 160);
   };
   useEffect(
@@ -170,17 +200,20 @@ export default function ThumbnailEditor({
 
     ctx.clearRect(0, 0, W, H);
     if (frame) {
-      const scale = Math.max(W / frame.width, H / frame.height);
-      const dw = frame.width * scale;
-      const dh = frame.height * scale;
-      ctx.drawImage(frame, (W - dw) / 2, (H - dh) / 2, dw, dh);
+      drawCover(ctx, frame, W, H);
     } else {
       ctx.fillStyle = '#111827';
       ctx.fillRect(0, 0, W, H);
     }
 
-    drawStyledText(ctx, W, H, { text, fontSize, uppercase, align, posX, posY, style });
-  }, [frame, text, fontSize, uppercase, align, posX, posY, style]);
+    drawStyledText(
+      ctx,
+      W,
+      H,
+      { text, fontSize, uppercase, align, posX, posY, style },
+      metricScale
+    );
+  }, [frame, text, fontSize, uppercase, align, posX, posY, style, W, H, metricScale]);
 
   // Drag anywhere on the canvas to move the text anchor.
   const setPosFromEvent = (clientX: number, clientY: number) => {
@@ -208,7 +241,9 @@ export default function ThumbnailEditor({
     setRestyling(true);
     setError(null);
     try {
-      await loadFrame(() => restyleEditFrame(editId, t, restylePrompt));
+      await loadFrame(() =>
+        restyleEditFrame(editId, t, restylePrompt, { width: W, height: H })
+      );
       setRestyled(true);
     } catch (e: any) {
       setError(e.message || 'AI restyle failed');
@@ -288,7 +323,7 @@ export default function ThumbnailEditor({
       };
       const { path } = await saveEditThumbnail(editId, {
         image: canvas.toDataURL('image/png'),
-        background: frame ? renderBackground(frame) : undefined,
+        background: frame ? renderBackground(frame, W, H) : undefined,
         spec,
       });
       setSavedPath(path);
@@ -317,18 +352,25 @@ export default function ThumbnailEditor({
 
   return (
     <div className="space-y-3">
-      <canvas
-        ref={canvasRef}
-        width={W}
-        height={H}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        style={{ touchAction: 'none' }}
-        className="w-full h-auto rounded border border-gray-200 dark:border-gray-700 bg-black cursor-move"
-      />
+      {/* A 9:16 canvas is capped by height so the tall short-form thumbnail
+          still fits in the modal. */}
+      <div className={portrait ? 'flex justify-center' : undefined}>
+        <canvas
+          ref={canvasRef}
+          width={W}
+          height={H}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          style={{ touchAction: 'none' }}
+          className={`${
+            portrait ? 'h-auto max-h-[70vh] max-w-full' : 'w-full h-auto'
+          } rounded border border-gray-200 dark:border-gray-700 bg-black cursor-move`}
+        />
+      </div>
       <p className="text-xs text-gray-400 dark:text-gray-500 -mt-1">
-        Tip: drag on the image to position the text.
+        Tip: drag on the image to position the text.{' '}
+        {portrait ? '9:16 (Shorts)' : '16:9 (YouTube)'} · {W}×{H}
       </p>
 
       {/* Frame picker */}

@@ -1360,6 +1360,7 @@ function EditDetail({
               editId={edit.id}
               duration={thumbDuration}
               suggestedTexts={copy?.thumbnail_texts ?? []}
+              portrait={isShort}
               saved={thumbnail}
               context={copy?.titles?.[0] ?? edit.script?.slice(0, 200) ?? ''}
               onSaved={setThumbnail}
